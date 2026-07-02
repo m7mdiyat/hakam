@@ -2,3 +2,21 @@
 node_modules/
 dist/
 .env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local dev store + audio (HAKAM_LOCAL=1)
+.localstore/
+.localaudio/
+
+# Service-account keys / secrets — never commit
+*-key.json
+service-account*.json
+gcp-*.json
+
+# Design decode scratch
+_decoded_*

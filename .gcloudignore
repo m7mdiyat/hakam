@@ -1,0 +1,18 @@
+# Uploaded to Cloud Build for `gcloud run deploy --source .`.
+# The Dockerfile builds the frontend, so node_modules/dist are rebuilt in-image.
+.git/
+.gitignore
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+**/__pycache__/
+**/*.pyc
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+.claude/
+_decoded_*
