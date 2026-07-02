@@ -308,18 +308,25 @@ button { font-family: inherit; }
    last in source order so it wins over the >=480px device-frame rules.
    ========================================================================== */
 @media (min-width: 900px) {
-  #app { display: flex; align-items: center; justify-content: center; padding: 40px 0; }
+  /* Desktop = a real full-viewport website: the app IS the page, edge-to-edge.
+     The design's 1440 frame represents the browser viewport, not an inner card,
+     so there is NO centered max-width card, no rounded corners, no shadow, and
+     the page background is the frame color (--bg) filling the whole viewport. */
+  #app { display: block; padding: 0; }
   .app {
-    width: min(1160px, calc(100vw - 64px));
-    max-width: 1160px;
-    height: min(900px, calc(100dvh - 80px));
-    border-radius: 20px;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+    width: 100%;
+    max-width: none;
+    min-height: 100dvh;
+    height: auto;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
   }
   .hdr { padding: 22px 44px; }
   .brand-name { font-size: 17px; }
   .crumb { font-size: 13px; }
-  .screen-body { padding: 8px 56px 48px; gap: 22px; }
+  .screen-body { padding: 8px 56px 48px; gap: 22px; overflow: visible; flex: 1 0 auto; }
 
   /* --- Landing --- */
   .landing { justify-content: center; gap: 48px; }
