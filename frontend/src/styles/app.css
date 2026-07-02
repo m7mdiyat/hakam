@@ -301,3 +301,77 @@ button { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .dot-b, .mic-recording { animation: none; }
 }
+
+/* ==========================================================================
+   Desktop layout (>= 900px) — the «سطح المكتب — التصميم الأساسي» reference.
+   Below 900px the mobile phone-frame layout above is untouched. This block is
+   last in source order so it wins over the >=480px device-frame rules.
+   ========================================================================== */
+@media (min-width: 900px) {
+  #app { display: flex; align-items: center; justify-content: center; padding: 40px 0; }
+  .app {
+    width: min(1160px, calc(100vw - 64px));
+    max-width: 1160px;
+    height: min(900px, calc(100dvh - 80px));
+    border-radius: 20px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  }
+  .hdr { padding: 22px 44px; }
+  .brand-name { font-size: 17px; }
+  .crumb { font-size: 13px; }
+  .screen-body { padding: 8px 56px 48px; gap: 22px; }
+
+  /* --- Landing --- */
+  .landing { justify-content: center; gap: 48px; }
+  .hero { gap: 20px; }
+  .wordmark { font-size: 118px; }
+  .tagline { font-size: 23px; }
+  .landing .stack { width: min(720px, 100%); align-self: center; flex-flow: row wrap; gap: 14px; }
+  .landing .stack > .input { width: auto; flex: 1 1 200px; height: 64px; font-size: 17px; }
+  .landing .stack > .btn-gold { width: 190px; height: 64px; font-size: 17px; }
+  .landing .stack > .sub-link,
+  .landing .stack > .join-row,
+  .landing .stack > .form-error { flex-basis: 100%; }
+  .features { font-size: 14px; display: flex; gap: 40px; justify-content: center; }
+
+  /* --- Lobby --- */
+  .lobby { max-width: 960px; width: 100%; margin-inline: auto; gap: 26px; }
+  .topic-pill { font-size: 16px; padding: 12px 28px; }
+  .invite { padding: 20px 26px; }
+  .invite-link { font-size: 19px; }
+  .lobby .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  .dcard { padding: 22px; }
+  .dcard-name { font-size: 18px; }
+  .lobby [data-primary] { width: 440px; align-self: center; height: 62px; }
+
+  /* --- Debate (two columns: timer/mic left, transcript right) --- */
+  .debate {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    grid-template-areas:
+      "chips  chips"
+      "timer  transcript"
+      "dots   transcript"
+      "mic    transcript"
+      "finish transcript";
+    column-gap: 32px;
+    row-gap: 20px;
+    align-items: start;
+    align-content: start;
+  }
+  .debate .chips { grid-area: chips; gap: 14px; }
+  .debate .chip { font-size: 13px; padding: 12px 18px; }
+  .debate .timer { grid-area: timer; }
+  .debate .dots { grid-area: dots; }
+  .debate .mic-wrap { grid-area: mic; }
+  .debate .finish { grid-area: finish; }
+  .debate .turns-panel { grid-area: transcript; align-self: stretch; }
+  .ring-wrap { width: 264px; height: 264px; }
+  .ring { width: 264px; height: 264px; }
+  .clock { font-size: 60px; }
+  .turn-label { font-size: 17px; }
+  .mic { width: 104px; height: 104px; }
+
+  /* --- Verdict / message (centered column) --- */
+  .verdict, .msg-card { max-width: 760px; width: 100%; margin-inline: auto; }
+}
