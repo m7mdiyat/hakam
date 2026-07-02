@@ -8,6 +8,7 @@ Production:    gunicorn -b :$PORT backend.app:app
 """
 from __future__ import annotations
 
+import mimetypes
 import os
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -16,6 +17,9 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from . import config
 from .rooms import api
 
+# Some slim base images don't know .woff2; register it so fonts serve as font/woff2.
+mimetypes.add_type("font/woff2", ".woff2")
+
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=None)
@@ -23,8 +27,12 @@ def create_app() -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = config.MAX_AUDIO_BYTES + 1024 * 1024
     app.register_blueprint(api)
 
+    # NOTE: Cloud Run's Google Front End reserves /healthz (it 404s before reaching
+    # the container), so /health is the externally reachable health path. Both are
+    # registered — /healthz still works locally and off-GFE.
+    @app.get("/health")
     @app.get("/healthz")
-    def healthz():
+    def health():
         return jsonify({"status": "ok", "mode": "local" if config.LOCAL_MODE else "cloud"})
 
     @app.errorhandler(RequestEntityTooLarge)
