@@ -2,6 +2,9 @@
 node_modules/
 dist/
 .env
+# Vite local env overrides (.env.development / .env.production ARE tracked)
+frontend/.env.local
+frontend/.env.*.local
 
 # Python
 __pycache__/

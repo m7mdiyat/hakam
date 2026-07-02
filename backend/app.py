@@ -12,6 +12,7 @@ import mimetypes
 import os
 
 from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from . import config
@@ -26,6 +27,19 @@ def create_app() -> Flask:
     # Independent server-side cap on upload size (UI soft-stop is not trusted).
     app.config["MAX_CONTENT_LENGTH"] = config.MAX_AUDIO_BYTES + 1024 * 1024
     app.register_blueprint(api)
+
+    # CORS: allow only the configured origins (GitHub Pages frontend + local dev),
+    # scoped to /api/* (the only cross-origin surface). flask-cors reflects the
+    # matching origin (never "*") and answers preflight incl. the X-Debater-Token
+    # header. No cookies are used, so supports_credentials stays False.
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": config.CORS_ORIGINS}},
+        allow_headers=["Content-Type", "X-Debater-Token"],
+        methods=["GET", "POST", "OPTIONS"],
+        supports_credentials=False,
+        max_age=600,
+    )
 
     # NOTE: Cloud Run's Google Front End reserves /healthz (it 404s before reaching
     # the container), so /health is the externally reachable health path. Both are

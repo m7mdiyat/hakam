@@ -14,7 +14,8 @@ design tokens (the visual source of truth is `design/hakam-design.html`).
 ## Architecture
 
 - **Frontend** — Vite vanilla-JS SPA, Arabic RTL, self-hosted variable Readex Pro.
-  Built to `frontend/dist/` and served by Flask (one origin, no CORS).
+  Served by Flask as a single origin, **or** hosted on GitHub Pages (`thehakam.com`)
+  calling the Cloud Run API cross-origin (see Split hosting below).
 - **Backend** — Python Flask. Room **state** lives in Firestore (never in-memory);
   **audio** lives in GCS (`hakam-audio`, 2-day lifecycle). All state transitions run
   in transactions so the server stays authoritative across scaled Cloud Run instances.
@@ -31,6 +32,18 @@ design/     hakam-design.html (source of truth) + NOTES.md (tokens)
 Dockerfile  multi-stage: node builds the SPA → Python serves it
 ```
 
+## Split hosting
+
+The frontend can run on **GitHub Pages** (`thehakam.com`) with the backend on **Cloud Run**:
+
+- `frontend/src/api.js` targets `VITE_API_BASE_URL` — `frontend/.env.production` → Cloud
+  Run URL, `frontend/.env.development` → `http://localhost:8080`. Empty → relative `/api`
+  (same-origin, when Flask serves the SPA).
+- The backend enables **CORS on `/api/*`**, restricted to `HAKAM_CORS_ORIGINS` (default
+  `https://thehakam.com,http://localhost:5173`) — the matching origin is reflected, never `*`.
+- **SPA routing on Pages**: `frontend/public/404.html` + a decode snippet in `index.html`
+  restore deep links like `/j/CODE` (Pages has no server-side routing).
+
 ## Local development
 
 No GCP credentials needed — `HAKAM_LOCAL=1` uses a file-backed store + local-disk audio.
@@ -45,7 +58,7 @@ HAKAM_LOCAL=1 gunicorn -b :8080 backend.app:app
 # open http://localhost:8080
 ```
 
-**Option B — hot-reloading frontend (Vite proxies /api to Flask):**
+**Option B — hot-reloading frontend (UI on :5173 calls the backend on :8080 cross-origin via CORS):**
 ```bash
 # terminal 1 — API
 HAKAM_LOCAL=1 flask --app backend.app run --port 8080
@@ -67,6 +80,8 @@ Copy `.env.example` to `.env` (gitignored). Key vars:
 | `HAKAM_AUDIO_BUCKET` | `hakam-audio` |
 | `HAKAM_TURN_SECONDS` | seconds per turn (default 120) |
 | `HAKAM_ROUNDS_PER_SIDE` | rounds each debater gets (default 2) |
+| `HAKAM_CORS_ORIGINS` | CORS allow-list for `/api/*` (default `https://thehakam.com,http://localhost:5173`) |
+| `VITE_API_BASE_URL` | **frontend** build var — backend base URL (`frontend/.env.{production,development}`) |
 | `GEMINI_API_KEY` | Phase 2 only — from Secret Manager on Cloud Run, `.env` locally. Never sent to the frontend. |
 
 ## Deploy (Cloud Run)

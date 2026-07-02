@@ -30,6 +30,12 @@ REGION = os.environ.get("HAKAM_REGION", "me-central1")
 AUDIO_BUCKET = os.environ.get("HAKAM_AUDIO_BUCKET", "hakam-audio")
 FIRESTORE_DATABASE = os.environ.get("HAKAM_FIRESTORE_DB", "(default)")
 
+# --- CORS (the GitHub Pages frontend calls this API cross-origin) ---
+# Comma-separated allow-list; NOT a wildcard. Default: production apex + local dev.
+CORS_ORIGINS = os.environ.get(
+    "HAKAM_CORS_ORIGINS", "https://thehakam.com,http://localhost:5173"
+).split(",")
+
 # --- Debate format (server-authoritative) -----------------------------------
 TURN_SECONDS = _int("HAKAM_TURN_SECONDS", 120)
 ROUNDS_PER_SIDE = _int("HAKAM_ROUNDS_PER_SIDE", 2)

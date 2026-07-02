@@ -1,4 +1,10 @@
-// API client. Same-origin in production; Vite proxies /api to Flask in dev.
+// API client. The backend base URL is configurable so the GitHub Pages frontend
+// and local dev can target different backends:
+//   frontend/.env.production  -> Cloud Run URL   (cross-origin, CORS)
+//   frontend/.env.development -> http://localhost:8080
+// Empty/unset falls back to a relative /api (same-origin, e.g. Cloud Run serving
+// the SPA itself).
+const API = `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api`;
 
 async function handle(res) {
   if (res.ok) return res.status === 204 ? null : res.json();
@@ -18,27 +24,27 @@ const jsonHeaders = (token) => {
 
 export const api = {
   createRoom: (topic) =>
-    fetch('/api/rooms', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ topic }) }).then(handle),
+    fetch(`${API}/rooms`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ topic }) }).then(handle),
 
-  getRoom: (code) => fetch(`/api/rooms/${code}`).then(handle),
+  getRoom: (code) => fetch(`${API}/rooms/${code}`).then(handle),
 
   joinRoom: (code, { name, claim, consent }) =>
-    fetch(`/api/rooms/${code}/join`, {
+    fetch(`${API}/rooms/${code}/join`, {
       method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ name, claim, consent }),
     }).then(handle),
 
   setClaim: (code, token, { name, claim }) =>
-    fetch(`/api/rooms/${code}/claim`, {
+    fetch(`${API}/rooms/${code}/claim`, {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ name, claim }),
     }).then(handle),
 
   ready: (code, token, want = true) =>
-    fetch(`/api/rooms/${code}/ready`, {
+    fetch(`${API}/rooms/${code}/ready`, {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ ready: want }),
     }).then(handle),
 
   finish: (code, token) =>
-    fetch(`/api/rooms/${code}/finish`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
+    fetch(`${API}/rooms/${code}/finish`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
 
   submitTurn: (code, token, blob, durationMs) => {
     const fd = new FormData();
@@ -46,14 +52,14 @@ export const api = {
     fd.append('audio', blob, `turn.${ext}`);
     fd.append('duration_ms', String(durationMs));
     fd.append('content_type', blob.type);
-    return fetch(`/api/rooms/${code}/turns`, {
+    return fetch(`${API}/rooms/${code}/turns`, {
       method: 'POST', headers: { 'X-Debater-Token': token }, body: fd,
     }).then(handle);
   },
 
   // Audio needs an auth header, so fetch as a blob and hand back an object URL.
   fetchAudioUrl: async (code, token, turn) => {
-    const res = await fetch(`/api/rooms/${code}/turns/${turn}/audio`, {
+    const res = await fetch(`${API}/rooms/${code}/turns/${turn}/audio`, {
       headers: { 'X-Debater-Token': token },
     });
     if (!res.ok) throw new Error('audio_fetch_failed');

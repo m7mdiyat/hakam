@@ -1,0 +1,27 @@
+<!doctype html>
+<html dir="rtl" lang="ar">
+  <head>
+    <meta charset="utf-8" />
+    <title>حَكَم</title>
+    <!--
+      GitHub Pages SPA fallback (Option A). Pages has no server-side routing, so a
+      direct hit / refresh on a client route like /j/CODE returns this 404 page.
+      We encode the path into a ?/ query and redirect to / ; index.html decodes it
+      back with history.replaceState so the SPA router sees the real path.
+      pathSegmentsToKeep = 0 because we serve from a custom apex domain (thehakam.com).
+    -->
+    <script>
+      (function (l) {
+        var pathSegmentsToKeep = 0;
+        l.replace(
+          l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+            l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
+            l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
+            (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+            l.hash
+        );
+      })(window.location);
+    </script>
+  </head>
+  <body></body>
+</html>
