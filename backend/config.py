@@ -66,5 +66,5 @@ _ROOT = Path(__file__).resolve().parent.parent
 LOCAL_STORE_DIR = Path(os.environ.get("HAKAM_LOCAL_STORE_DIR", _ROOT / ".localstore"))
 LOCAL_AUDIO_DIR = Path(os.environ.get("HAKAM_LOCAL_AUDIO_DIR", _ROOT / ".localaudio"))
 
-# Built frontend location (Flask serves this in production).
-DIST_DIR = Path(os.environ.get("HAKAM_DIST_DIR", _ROOT / "frontend" / "dist"))
+# The frontend lives on GitHub Pages; the Cloud Run root redirects here.
+FRONTEND_URL = os.environ.get("HAKAM_FRONTEND_URL", "https://thehakam.com").rstrip("/")

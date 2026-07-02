@@ -1,25 +1,22 @@
-"""Flask entrypoint.
+"""Flask entrypoint — API-only backend on Cloud Run.
 
-One Cloud Run service serves both the JSON API (/api/*) and the built Vite SPA
-(everything else -> dist/index.html), so there is no CORS to configure.
+The frontend lives on GitHub Pages (thehakam.com); this service exposes the JSON
+API (/api/*) and a health check, and 302-redirects every other path to the
+frontend (preserving path + query so old Cloud-Run links map over).
 
 Run locally:   HAKAM_LOCAL=1 flask --app backend.app run --port 8080
 Production:    gunicorn -b :$PORT backend.app:app
 """
 from __future__ import annotations
 
-import mimetypes
 import os
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from . import config
 from .rooms import api
-
-# Some slim base images don't know .woff2; register it so fonts serve as font/woff2.
-mimetypes.add_type("font/woff2", ".woff2")
 
 
 def create_app() -> Flask:
@@ -41,9 +38,8 @@ def create_app() -> Flask:
         max_age=600,
     )
 
-    # NOTE: Cloud Run's Google Front End reserves /healthz (it 404s before reaching
-    # the container), so /health is the externally reachable health path. Both are
-    # registered — /healthz still works locally and off-GFE.
+    # Health on /health (Cloud Run's Google Front End reserves /healthz and 404s it
+    # before it reaches the container); both are registered so /healthz works locally.
     @app.get("/health")
     @app.get("/healthz")
     def health():
@@ -55,36 +51,22 @@ def create_app() -> Flask:
 
     @app.errorhandler(404)
     def _not_found(_e):
-        # Unknown API path -> JSON; anything else falls through to the SPA below.
         if request.path.startswith("/api/"):
             return jsonify({"error": "not_found", "message": "غير موجود."}), 404
-        return _serve_spa("")
+        return redirect(config.FRONTEND_URL, code=302)
 
-    # --- static SPA (built frontend) ---------------------------------------
-    dist = str(config.DIST_DIR)
-
-    def _serve_spa(path: str):
-        index = config.DIST_DIR / "index.html"
-        if not index.exists():
-            return jsonify({
-                "status": "no_build",
-                "message": "Frontend not built. Run `npm --prefix frontend run build`, "
-                           "or use the Vite dev server on :5173 in development.",
-            }), 200
-        target = config.DIST_DIR / path
-        if path and target.is_file():
-            return send_from_directory(dist, path)
-        return send_from_directory(dist, "index.html")
-
+    # Everything that isn't the API belongs to the frontend on GitHub Pages.
     @app.get("/")
     def _root():
-        return _serve_spa("")
+        return redirect(config.FRONTEND_URL + "/", code=302)
 
     @app.get("/<path:path>")
-    def _spa(path):
+    def _frontend_redirect(path):
         if path.startswith("api/"):
             return jsonify({"error": "not_found", "message": "غير موجود."}), 404
-        return _serve_spa(path)
+        qs = f"?{request.query_string.decode()}" if request.query_string else ""
+        # path is captured without a leading slash, so the target stays on FRONTEND_URL.
+        return redirect(f"{config.FRONTEND_URL}/{path}{qs}", code=302)
 
     return app
 
