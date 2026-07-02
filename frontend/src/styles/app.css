@@ -58,6 +58,7 @@ button { font-family: inherit; }
 .brand svg { display: block; }
 .brand-name { font-size: 15px; font-weight: 600; color: var(--ink); }
 .crumb { font-size: 12px; color: var(--muted-2); }
+.crumb-desktop { display: none; }   /* landing breadcrumb: desktop only */
 
 /* Scroll area ------------------------------------------------------------- */
 .screen-body {
@@ -129,6 +130,7 @@ button { font-family: inherit; }
 .join-row .input { flex: 1; }
 .join-row .btn { width: auto; padding: 0 20px; height: 58px; }
 .features { text-align: center; font-size: 12px; color: var(--muted-2); }
+.features-icons { display: none; }   /* icon feature row: desktop only */
 
 /* Cards / pills ----------------------------------------------------------- */
 .card {
@@ -339,7 +341,13 @@ button { font-family: inherit; }
   .landing .stack > .sub-link,
   .landing .stack > .join-row,
   .landing .stack > .form-error { flex-basis: 100%; }
-  .features { font-size: 14px; display: flex; gap: 40px; justify-content: center; }
+  /* Desktop-only landing touches: breadcrumb + icon feature row (mobile keeps
+     the plain «·»-separated text and no breadcrumb, matching the mobile design). */
+  .crumb-desktop { display: block; }
+  .features-text { display: none; }
+  .features-icons { display: flex; align-items: center; justify-content: center; gap: 56px; }
+  .feat-item { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+  .feat-item svg { display: block; }
 
   /* --- Lobby --- */
   .lobby { max-width: 960px; width: 100%; margin-inline: auto; gap: 26px; }

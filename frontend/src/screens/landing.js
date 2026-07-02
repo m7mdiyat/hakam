@@ -1,11 +1,11 @@
 import { header } from '../components.js';
-import { logo } from '../icons.js';
+import { logo, mic, shield } from '../icons.js';
 import { api } from '../api.js';
 import { creds } from '../store.js';
 import { normalizeCode } from '../codeutil.js';
 
 export function mountLanding(root, ctx) {
-  root.innerHTML = header('') + `
+  root.innerHTML = header('إنشاء جلسة', { crumbDesktopOnly: true }) + `
     <div class="screen-body landing">
       <div class="hero">
         <div class="hero-mark">${logo(56, 'var(--gold)', 1.2)}</div>
@@ -28,7 +28,12 @@ export function mountLanding(root, ctx) {
         <div class="form-error" data-error hidden></div>
       </form>
 
-      <div class="features">مناظرة صوتية · حَكَم محايد · بدون تسجيل حساب</div>
+      <div class="features features-text">مناظرة صوتية · حَكَم محايد · بدون تسجيل حساب</div>
+      <div class="features-icons">
+        <span class="feat-item">${mic(18, 'var(--muted)')}<span>مناظرة صوتية</span></span>
+        <span class="feat-item">${logo(18, 'var(--muted)', 1.5)}<span>حَكَم محايد</span></span>
+        <span class="feat-item">${shield(18, 'var(--muted)')}<span>بدون تسجيل حساب</span></span>
+      </div>
     </div>`;
 
   const topic = root.querySelector('[data-topic]');

@@ -27,6 +27,10 @@ export const play = (size = 16, stroke = 'var(--ink-2)', sw = 1.8) => svg(size, 
 export const stop = (size = 16, stroke = 'var(--ink-2)', sw = 1.8) => svg(size, stroke, sw,
   '<rect x="6" y="6" width="12" height="12" rx="2" fill="' + stroke + '"/>');
 
+// Shield — «بدون تسجيل حساب» feature icon.
+export const shield = (size = 18, stroke = 'var(--muted)', sw = 1.5) => svg(size, stroke, sw,
+  '<path d="M12 3l7 3v5c0 4.6-3 7.7-7 9.2-4-1.5-7-4.6-7-9.2V6z"/>');
+
 // Countdown ring. `frac` = remaining/total in [0,1]; full ring = full time.
 // circumference = 2·π·88 ≈ 552.9 ; offset grows as time drains (matches the design).
 export const CIRC = 552.9;
