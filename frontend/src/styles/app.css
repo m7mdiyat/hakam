@@ -200,6 +200,16 @@ button { font-family: inherit; }
 .dot-b { background: var(--coral); animation: pulse 1.4s ease-in-out infinite; }
 
 .format-row { text-align: center; font-size: 13px; color: var(--muted); }
+/* Creator's round-count picker (lobby) */
+.format-pick { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line-12); border-radius: 999px; overflow: hidden; }
+.seg-btn {
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; color: var(--muted); padding: 6px 16px;
+}
+.seg-btn + .seg-btn { border-inline-start: 1px solid var(--line-08); }
+.seg-btn.seg-on { background: rgba(201, 164, 92, 0.16); color: var(--gold); font-weight: 600; }
+.seg-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Debate ------------------------------------------------------------------ */
 .debate { gap: 18px; }
@@ -256,6 +266,9 @@ button { font-family: inherit; }
 .mic-waiting { opacity: 0.6; }
 .mic:disabled { cursor: default; }
 .mic-label { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* Voice-reactive glow: --level (0..1) is set from the live mic RMS. */
+.mic-recording { box-shadow: 0 0 calc(4px + var(--level, 0) * 30px) 0 var(--mic-color, transparent); }
+.wave { display: block; width: 224px; height: 36px; }
 
 .dots { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
 .dot-item { display: flex; align-items: center; gap: 6px; }
@@ -392,6 +405,20 @@ button { font-family: inherit; }
 .tip-line { font-size: 12.5px; color: var(--ink-2); line-height: 1.8; }
 .tip-line b { color: var(--ink); font-weight: 600; }
 .tip-advice { color: var(--ink); }
+
+/* Full-transcript collapsible (verdict) */
+.v-collapse-head {
+  display: flex; align-items: center; justify-content: space-between;
+  background: transparent; border: none; cursor: pointer; padding: 0;
+  font-size: 12.5px; font-weight: 600; color: var(--muted); font-family: inherit;
+}
+.v-collapse-head .chev { transition: transform 0.15s; color: var(--muted-2); }
+.v-collapse-head.open .chev { transform: rotate(180deg); }
+.v-collapse-body { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+.tr-turn { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line-06); padding-top: 12px; }
+.tr-head { display: flex; align-items: center; gap: 10px; }
+.tr-head .proof-btn { margin-inline-start: auto; }
+.tr-text { font-size: 13px; color: var(--ink-2); line-height: 1.9; }
 
 /* Message screen ---------------------------------------------------------- */
 .msg-card { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 320px; }

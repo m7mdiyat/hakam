@@ -8,12 +8,13 @@ import { TurnRecorder, isSupported } from '../recorder.js';
 const TEAL = 'var(--teal)';
 const CORAL = 'var(--coral)';
 const sideColor = (s) => (s === 'a' ? TEAL : CORAL);
+const sideHex = (s) => (s === 'a' ? '#3FB8AF' : '#F2735F');   // canvas needs concrete colors
 const sideInk = (s) => (s === 'a' ? '#062B29' : '#3d120c');
 const sideOf = (turnKey) => turnKey.split('_')[1][0];
 const roundOf = (turnKey) => parseInt(turnKey.slice(-1), 10);
-const roundName = (r) => (r === 1 ? 'الافتتاح' : r === 2 ? 'الرد' : `الجولة ${r}`);
-const roundShort = (r) => (r === 1 ? 'افتتاح' : r === 2 ? 'رد' : `ج${r}`);
-const sideLetter = (s) => (s === 'a' ? 'أ' : 'ب');
+// Debaters are identified by name + color everywhere; rounds get ordinals.
+const ROUND_AR = ['الأولى', 'الثانية', 'الثالثة'];
+const roundLabel = (r) => `الجولة ${ROUND_AR[r - 1] || r}`;
 
 export function mountDebate(root, ctx) {
   const { code } = ctx;
@@ -37,6 +38,7 @@ export function mountDebate(root, ctx) {
 
       <div class="mic-wrap">
         <button class="mic" data-mic type="button"><span class="mic-glyph" data-mic-glyph></span></button>
+        <canvas class="wave" data-wave width="224" height="36" hidden></canvas>
         <div class="mic-label" data-mic-label></div>
       </div>
 
@@ -68,22 +70,34 @@ export function mountDebate(root, ctx) {
 
   let lastState = null;
   let chipsBuilt = false;
-  let anchor = null;      // { deadline, serverNow, perf, total }
+  let anchor = null;      // speaking clock { deadline, serverNow, perf, total }
+  let prep = null;        // prep clock { deadline, serverNow, perf, label }
   let raf = null;
 
   // --- countdown (server-anchored, ticked locally) -----------------------
+  const anchorRemaining = (a, cap) => {
+    const rem = a.deadline - (a.serverNow + (performance.now() - a.perf));
+    return Math.max(0, cap != null ? Math.min(cap, rem) : rem);
+  };
   function remainingMs() {
-    if (!anchor) return 0;
-    const rem = anchor.deadline - (anchor.serverNow + (performance.now() - anchor.perf));
-    return Math.max(0, Math.min(anchor.total, rem));
+    return anchor ? anchorRemaining(anchor, anchor.total) : 0;
   }
   function paintTimer() {
-    const rem = remainingMs();
-    clockEl.textContent = fmtClock(rem);
-    const frac = anchor && anchor.total ? rem / anchor.total : 0;
-    if (ringEl) ringEl.setAttribute('stroke-dashoffset', (CIRC * (1 - frac)).toFixed(1));
-    if (rem > 0) raf = requestAnimationFrame(paintTimer);
-    else raf = null;
+    if (anchor) {
+      // Speaking: the ring drains with the debater's clock.
+      const rem = remainingMs();
+      clockEl.textContent = fmtClock(rem);
+      const frac = anchor.total ? rem / anchor.total : 0;
+      if (ringEl) ringEl.setAttribute('stroke-dashoffset', (CIRC * (1 - frac)).toFixed(1));
+      raf = rem > 0 ? requestAnimationFrame(paintTimer) : null;
+    } else if (prep) {
+      // Prep: ring stays full; the label counts down the start-your-mic window.
+      const rem = anchorRemaining(prep);
+      turnLabel.textContent = `${prep.label} — ${fmtClock(rem)}`;
+      raf = rem > 0 ? requestAnimationFrame(paintTimer) : null;
+    } else {
+      raf = null;
+    }
   }
   function restartTimer() {
     if (raf) cancelAnimationFrame(raf);
@@ -118,7 +132,8 @@ export function mountDebate(root, ctx) {
 
   function setMic(kind) {
     // kind: 'idle' | 'recording' | 'uploading' | 'waiting'
-    if (kind !== 'recording') stopRecTick();
+    if (kind !== 'recording') { stopRecTick(); waveEl.hidden = true; resetWave(); }
+    else waveEl.hidden = false;
     micBtn.className = `mic mic-${kind} mic-${mine}`;
     micBtn.style.setProperty('--mic-color', sideColor(mine));
     if (kind === 'recording') {
@@ -162,18 +177,45 @@ export function mountDebate(root, ctx) {
 
   function startRec() {
     if (recording || uploading || !myTurn()) return;
-    const rem = remainingMs();
+    // The speaking clock starts at the first mic tap (server-stamped). A later
+    // tap on the same turn (e.g. after a too-short discard) resumes the clock.
+    const started = lastState && lastState.turn_started;
+    const rem = started ? remainingMs() : lastState.format.turn_seconds * 1000;
     if (rem <= 400) { toast('انتهى وقت الجولة'); return; }
     recording = true;
     setMic('recording');
+    if (!started) api.startTurn(code, token).then(apply).catch(() => { /* poll corrects */ });
     rec = new TurnRecorder({
       maxMs: rem,
       onStart: () => { if (recording) startRecTick(); },
       onStop: onRecorded,
       onDiscard: onDiscarded,
+      onLevel: drawLevel,
       onError: () => { recording = false; refreshMic(); toast('تعذّر الوصول للميكروفون'); },
     });
     rec.start();
+  }
+
+  // --- live mic level (waveform bars + orb glow) ---------------------------
+  const waveEl = $('[data-wave]');
+  const wctx = waveEl.getContext('2d');
+  const LEVELS = new Array(28).fill(0);
+  function drawLevel(rms) {
+    LEVELS.unshift(rms);
+    LEVELS.pop();
+    micBtn.style.setProperty('--level', rms.toFixed(2));
+    const w = waveEl.width, h = waveEl.height, gap = w / LEVELS.length;
+    wctx.clearRect(0, 0, w, h);
+    wctx.fillStyle = sideHex(mine);
+    for (let i = 0; i < LEVELS.length; i++) {   // newest bar enters from the right (RTL)
+      const bh = Math.max(3, LEVELS[i] * h);
+      wctx.fillRect(w - (i + 1) * gap, (h - bh) / 2, gap - 3, bh);
+    }
+  }
+  function resetWave() {
+    LEVELS.fill(0);
+    wctx.clearRect(0, 0, waveEl.width, waveEl.height);
+    micBtn.style.removeProperty('--level');
   }
 
   // Terminal no-upload outcomes (too short / canceled / empty / error). Without
@@ -260,7 +302,7 @@ export function mountDebate(root, ctx) {
       const st = i < state.turn_index ? 'done' : i === state.turn_index ? 'current' : 'future';
       return `<div class="dot-item">
         <i class="tdot tdot-${st} tdot-${s}"></i>
-        <span class="tdot-label ${st === 'future' ? 'is-future' : ''}">${roundShort(roundOf(tk))} ${sideLetter(s)}</span>
+        <span class="tdot-label ${st === 'future' ? 'is-future' : ''}">${ROUND_AR[roundOf(tk) - 1] || roundOf(tk)}</span>
       </div>`;
     }).join('');
   }
@@ -289,7 +331,7 @@ export function mountDebate(root, ctx) {
       return `<div class="turn-bubble turn-bubble-col">
         <div class="turn-row">
           <div class="turn-meta"><span class="turn-name turn-${t.debater}">${esc(name)}</span>
-            <span class="micro-2">${roundShort(roundOf(t.turn))} ${sideLetter(t.debater)}</span></div>
+            <span class="micro-2">${roundLabel(roundOf(t.turn))}</span></div>
           ${right}</div>
         ${transcriptHtml(t)}</div>`;
     }).join('');
@@ -300,22 +342,38 @@ export function mountDebate(root, ctx) {
     lastState = state;
     if (!chipsBuilt) { renderChips(state); chipsBuilt = true; }
 
-    // timer anchor
+    // timer anchors: speaking clock (deadline set) vs prep window (not started)
     const secs = state.format.turn_seconds;
     totalEl.textContent = `من ${fmtClock(secs * 1000)}`;
-    if (state.turn_deadline_at && state.current_turn) {
-      anchor = {
-        deadline: Date.parse(state.turn_deadline_at),
-        serverNow: Date.parse(state.server_now),
-        perf: performance.now(),
-        total: secs * 1000,
-      };
-      const col = sideColor(sideOf(state.current_turn));
+    if (state.current_turn) {
+      const side = sideOf(state.current_turn);
+      const col = sideColor(side);
+      const nm = state.debaters[side].name || '';
       if (ringEl) ringEl.setAttribute('stroke', col);
-      const r = roundOf(state.current_turn);
-      const nm = state.debaters[sideOf(state.current_turn)].name || '';
-      turnLabel.textContent = `دور ${nm} — جولة ${roundName(r)}`;
       turnLabel.style.color = col;
+      if (state.turn_deadline_at) {
+        anchor = {
+          deadline: Date.parse(state.turn_deadline_at),
+          serverNow: Date.parse(state.server_now),
+          perf: performance.now(),
+          total: secs * 1000,
+        };
+        prep = null;
+        turnLabel.textContent = `دور ${nm} — ${roundLabel(roundOf(state.current_turn))}`;
+      } else {
+        // Turn not started: full ring, full clock, prep countdown in the label.
+        anchor = null;
+        clockEl.textContent = fmtClock(secs * 1000);
+        if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');
+        const base = side === mine ? 'دورك — اضغط للتحدث' : `بانتظار ${nm}`;
+        prep = state.turn_prep_deadline_at ? {
+          deadline: Date.parse(state.turn_prep_deadline_at),
+          serverNow: Date.parse(state.server_now),
+          perf: performance.now(),
+          label: base,
+        } : null;
+        turnLabel.textContent = base;
+      }
       restartTimer();
     }
 

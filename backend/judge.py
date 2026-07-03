@@ -420,6 +420,25 @@ def _results_block(merged: dict) -> str:
     return "\n".join(lines)
 
 
+def _deanonymize_display(text: str, room: dict) -> str:
+    """DISPLAY-ONLY, applied strictly AFTER all model calls: swap the synthesis
+    narrative's «المتحدث «أ»» references for the real names humans see. The
+    judge pipeline's inputs stay fully anonymized (strip_names / labels) — this
+    touches nothing that is ever sent to a model, and never touches quotes."""
+    if not text:
+        return text
+    names = {s: room["debaters"][s].get("name")
+             or ("الطرف الأول" if s == "a" else "الطرف الثاني") for s in SIDES_REAL}
+    for label, side in (("أ", "a"), ("ب", "b")):
+        for pat in (f"المتحدث «{label}»", f"المتحدث ({label})", f"المتحدث {label}",
+                    f"المتناظر «{label}»"):
+            text = text.replace(pat, names[side])
+    return text
+
+
+SIDES_REAL = ("a", "b")
+
+
 _FALLBACK_REASONING = {
     "close": "جاء أداء الطرفين متقاربًا إلى حدّ لا يمكن معه الجزم بمتفوّق، إذ لم يثبت فائز عند تدقيق الحكم بترتيبات مختلفة.",
     "medium": "رجحت كفة الفائز بهامش ضئيل بعد موازنة المعايير الخمسة.",
@@ -498,6 +517,17 @@ def build_verdict(room: dict) -> dict:
     merged = merge_probes(probes, inapplicable=_inapplicable_axes(room))
     fallacies = _finalize_fallacies(room, merged)
     narrative = _run_synthesis(room, merged)
+
+    # Human-facing narrative gets real names (model I/O stayed anonymized).
+    narrative["reasoning_ar"] = _deanonymize_display(narrative["reasoning_ar"], room)
+    if narrative["key_moment"]:
+        narrative["key_moment"]["description_ar"] = _deanonymize_display(
+            narrative["key_moment"]["description_ar"], room)
+    if narrative["profiles"]:
+        for side in ("a", "b"):
+            p = narrative["profiles"][side]
+            for k in ("strongest_ar", "weakest_ar", "tip_ar"):
+                p[k] = _deanonymize_display(p[k], room)
 
     turn_key_of = {i["tid"]: i["entry"]["turn"] for i in _turn_infos(room)}
     dropped = [{"speaker": d["speaker"], "point_ar": d["point_ar"],

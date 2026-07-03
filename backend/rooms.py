@@ -154,6 +154,43 @@ def set_claim(code):
     return _view(get_store().update(normalize_code(code), mut))
 
 
+@api.post("/rooms/<code>/format")
+def set_format(code):
+    """Creator (A) adjusts the round count from the lobby, pre-debate only.
+    Resets both ready flags so the format change is re-consented."""
+    rounds = _body().get("rounds_per_side")
+    if rounds not in config.ROUNDS_CHOICES:
+        raise ApiError(400, "invalid_input", "عدد الجولات غير صالح.")
+    room = _load(code)
+    if _require_side(room) != "a":
+        raise ApiError(403, "not_creator", "منشئ الجلسة فقط يعدّل الصيغة.")
+
+    def mut(r: dict):
+        if r["state"] not in S.PRE_DEBATE:
+            raise ApiError(409, "already_started", "بدأت المناظرة؛ لا يمكن تعديل الصيغة.")
+        S.set_format(r, rounds, S.now_utc())
+
+    return _view(get_store().update(normalize_code(code), mut))
+
+
+@api.post("/rooms/<code>/turns/start")
+def start_turn(code):
+    """The debater tapped the mic: start the server-stamped speaking clock.
+    Idempotent; only the current turn's holder may start it."""
+    room = _load(code)
+    side = _require_side(room)
+
+    def mut(r: dict):
+        ct = S.current_turn(r)
+        if ct is None:
+            raise ApiError(409, "not_active", "لا توجد جولة نشطة الآن.")
+        if S.side_of_turn(ct) != side:
+            raise ApiError(409, "not_your_turn", "ليس دورك الآن.")
+        S.start_turn(r, S.now_utc())
+
+    return _view(get_store().update(normalize_code(code), mut))
+
+
 @api.post("/rooms/<code>/ready")
 def ready(code):
     want = _body().get("ready", True)

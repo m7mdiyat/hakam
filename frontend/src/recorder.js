@@ -32,12 +32,13 @@ export class TurnRecorder {
   //   onDiscard(reason) — 'too_short' | 'canceled' | 'empty' | 'error'.
   // Callers key their UI state off these; a recorder that could end silently
   // (the old <MIN_MS path) wedges the caller's "recording" flag forever.
-  constructor({ maxMs = 120000, onStart, onStop, onDiscard, onError } = {}) {
+  constructor({ maxMs = 120000, onStart, onStop, onDiscard, onError, onLevel } = {}) {
     this.maxMs = maxMs;
     this.onStart = onStart;
     this.onStop = onStop;
     this.onDiscard = onDiscard;
     this.onError = onError;
+    this.onLevel = onLevel;   // ~30fps mic RMS in [0,1] while recording
     this.recording = false;
     this._pending = false;   // getUserMedia in flight
     this._abort = false;     // stop()/cancel() arrived while pending
@@ -73,7 +74,31 @@ export class TurnRecorder {
     this.rec.start();
     this.recording = true;
     if (this.onStart) this.onStart();
+    this._startMeter();
     this._timer = setTimeout(() => this.stop(), this.maxMs);
+  }
+
+  // Live level meter on the SAME stream (no extra permission): AnalyserNode
+  // time-domain RMS. Drives the waveform bars so a dead mic is visibly flat.
+  _startMeter() {
+    if (!this.onLevel) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this._audioCtx = new Ctx();
+      const analyser = this._audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      this._audioCtx.createMediaStreamSource(this.stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      this._meter = setInterval(() => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        this.onLevel(Math.min(1, Math.sqrt(sum / buf.length) * 3));
+      }, 33);
+    } catch { /* metering is cosmetic — recording continues without it */ }
   }
 
   stop() { this._end(false); }
@@ -113,6 +138,8 @@ export class TurnRecorder {
   }
 
   _cleanup() {
+    if (this._meter) { clearInterval(this._meter); this._meter = null; }
+    if (this._audioCtx) { try { this._audioCtx.close(); } catch { /* ignore */ } this._audioCtx = null; }
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }

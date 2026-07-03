@@ -30,7 +30,7 @@ export function mountLobby(root, ctx) {
         <div data-slot-b></div>
       </div>
 
-      <div class="format-row">جولتان لكل طرف · دقيقتان للجولة</div>
+      <div class="format-row" data-format></div>
       <button class="btn" data-primary></button>
     </div>`;
 
@@ -108,6 +108,46 @@ export function mountLobby(root, ctx) {
     });
   }
 
+  // --- format row: creator picks the round count; the other side sees it ----
+  const ROUNDS_TEXT = { 1: 'جولة واحدة لكل طرف', 2: 'جولتان لكل طرف', 3: '٣ جولات لكل طرف' };
+  const formatEl = root.querySelector('[data-format]');
+  let formatBusy = false;
+
+  function turnLenText(secs) {
+    return secs === 120 ? 'دقيقتان للجولة' : secs === 60 ? 'دقيقة للجولة' : `${secs} ثانية للجولة`;
+  }
+
+  function renderFormat(state) {
+    const rounds = state.format.rounds_per_side;
+    const len = turnLenText(state.format.turn_seconds);
+    if (mine !== 'a') {
+      formatEl.innerHTML = `${esc(ROUNDS_TEXT[rounds] || `${rounds} جولات`)} · ${len}`;
+      return;
+    }
+    formatEl.innerHTML = `
+      <div class="format-pick">
+        <span class="micro">عدد الجولات</span>
+        <div class="seg" role="group">
+          ${[1, 2, 3].map((n) => `
+            <button type="button" class="seg-btn ${n === rounds ? 'seg-on' : ''}"
+              data-rounds="${n}" ${formatBusy ? 'disabled' : ''}>${n === 1 ? 'واحدة' : n === 2 ? 'جولتان' : 'ثلاث'}</button>`).join('')}
+        </div>
+        <span class="micro-2">${len}</span>
+      </div>`;
+  }
+
+  formatEl.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-rounds]');
+    if (!b || formatBusy || mine !== 'a') return;
+    const n = parseInt(b.getAttribute('data-rounds'), 10);
+    formatBusy = true;
+    try { apply(await api.setFormat(code, token, n)); }
+    catch (err) { toast(err.message || 'تعذّر تعديل الصيغة'); }
+    finally { formatBusy = false; if (lastState) renderFormat(lastState); }
+  });
+
+  let lastState = null;
+
   function primaryFor(state) {
     const me = state.debaters[mine];
     if (!me.claim) return { label: 'اكتب دعواك للاستعداد', disabled: true, cls: 'btn-disabled' };
@@ -124,7 +164,9 @@ export function mountLobby(root, ctx) {
   });
 
   function apply(state) {
+    lastState = state;
     root.querySelector('[data-topic]').textContent = state.topic;
+    renderFormat(state);
 
     // Opponent card: always refresh (no inputs there).
     slot[other].innerHTML = populatedCard(other, state.debaters[other]);

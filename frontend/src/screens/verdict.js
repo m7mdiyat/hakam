@@ -5,7 +5,7 @@
 // server-side, so firing is always safe).
 import { header, toast } from '../components.js';
 import { logo, play as playIcon, stop as stopIcon } from '../icons.js';
-import { esc } from '../ui.js';
+import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
 import { creds } from '../store.js';
 import { createProofPlayer } from '../audioproof.js';
@@ -20,10 +20,9 @@ const BAND_AR = { decisive: 'فوز حاسم', clear: 'فوز واضح', narrow:
 
 const sideColor = (s) => (s === 'a' ? 'var(--teal)' : 'var(--coral)');
 const roundOf = (tk) => parseInt(tk.slice(-1), 10);
-const turnLabel = (tk) => {
-  const side = tk.split('_')[1][0] === 'a' ? 'أ' : 'ب';
-  return `${roundOf(tk) === 1 ? 'افتتاح' : 'رد'} ${side}`;
-};
+// Debaters are identified by name + color; turns get ordinal round labels.
+const ROUND_AR = ['الأولى', 'الثانية', 'الثالثة'];
+const turnLabel = (tk) => `الجولة ${ROUND_AR[roundOf(tk) - 1] || roundOf(tk)}`;
 const nameOf = (state, side) =>
   state.debaters[side].name || (side === 'a' ? 'الطرف الأول' : 'الطرف الثاني');
 const meanScore = (scores) => {
@@ -208,6 +207,44 @@ function tipsHtml(state, v) {
       <div class="tips-grid">${cards}</div></div>`;
 }
 
+// Full transcript, collapsed by default: every turn in order with continuous
+// playback (shared proof player + blob cache) and the joined transcript text.
+function transcriptPanelHtml(state) {
+  const rows = state.turns.map((t) => {
+    const name = esc(nameOf(state, t.debater));
+    const label = turnLabel(t.turn);
+    if (t.forfeited) {
+      return `<div class="tr-turn">
+        <div class="tr-head"><span class="turn-name turn-${t.debater}">${name}</span>
+          <span class="micro-2">${label}</span><span class="turn-forfeit">لم يُسجَّل</span></div>
+      </div>`;
+    }
+    const tr = t.transcript;
+    const text = tr && tr.status === 'ok'
+      ? tr.segments.map((s) => esc(s.text)).join(' ')
+      : '<span class="micro-2">تعذّر نسخ هذه المداخلة</span>';
+    const dur = t.duration_s ? fmtClock(t.duration_s * 1000) : 'تشغيل';
+    return `<div class="tr-turn">
+      <div class="tr-head">
+        <span class="turn-name turn-${t.debater}">${name}</span>
+        <span class="micro-2">${label}</span>
+        <button class="proof-btn" type="button" data-proof="tr-${t.turn}" data-turn="${t.turn}"
+          data-start="0"${t.duration_s ? ` data-end="${t.duration_s}"` : ''}>
+          <span class="proof-icon">${playIcon(13, 'currentColor')}</span> ${dur}
+        </button>
+      </div>
+      <div class="tr-text">${text}</div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="v-panel">
+      <button class="v-collapse-head" type="button" data-collapse>
+        <span>النص الكامل للمناظرة</span><span class="chev">▾</span>
+      </button>
+      <div class="v-collapse-body" hidden>${rows}</div>
+    </div>`;
+}
+
 export function verdictHtml(state) {
   const v = state.verdict;
   return `
@@ -220,6 +257,7 @@ export function verdictHtml(state) {
       ${droppedHtml(state, v)}
       ${momentHtml(v)}
       ${tipsHtml(state, v)}
+      ${transcriptPanelHtml(state)}
       <div class="verdict-actions">
         <button class="btn btn-gold" data-share type="button">شارك الحُكْم</button>
         <button class="btn btn-ghost" data-rematch type="button">مناظرة جديدة بنفس الموضوع</button>
@@ -276,11 +314,19 @@ export function mountVerdict(root, ctx) {
     player = createProofPlayer(code, token, markProofs);
 
     root.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-collapse]');
+      if (c) {
+        const body = c.parentElement.querySelector('.v-collapse-body');
+        body.hidden = !body.hidden;
+        c.classList.toggle('open', !body.hidden);
+        return;
+      }
       const b = e.target.closest('[data-proof]');
       if (b) {
+        const end = parseFloat(b.getAttribute('data-end'));
         player.toggle(
           b.getAttribute('data-proof'), b.getAttribute('data-turn'),
-          parseFloat(b.getAttribute('data-start')), parseFloat(b.getAttribute('data-end')),
+          parseFloat(b.getAttribute('data-start')) || 0, Number.isNaN(end) ? null : end,
         ).catch(() => toast('تعذّر تشغيل التسجيل'));
       }
     });

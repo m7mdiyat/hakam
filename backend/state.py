@@ -72,7 +72,8 @@ def new_room(code: str, topic: str, token_a: str) -> dict:
         },
         "turn_order": order,
         "turn_index": 0,
-        "turn_deadline_at": None,
+        "turn_deadline_at": None,       # speaking clock; set when the mic starts
+        "turn_prep_deadline_at": None,  # start-your-mic-by; set when a turn begins
         "turns": [],
         "finish_requested": {"a": False, "b": False},
         "verdict": None,  # Phase 2
@@ -132,11 +133,30 @@ def is_expired(room: dict, now: Optional[datetime] = None) -> bool:
 
 
 # --- transitions (each returns True if it mutated) --------------------------
+def set_format(room: dict, rounds_per_side: int, now: Optional[datetime] = None) -> None:
+    """Creator adjusts the round count in the lobby. Resets BOTH ready flags so
+    nobody is committed to a format they didn't see. Caller has validated
+    pre-debate state and the allowed range."""
+    now = now or now_utc()
+    room["format"]["rounds_per_side"] = int(rounds_per_side)
+    room["turn_order"] = build_turn_order(int(rounds_per_side))
+    for s in SIDES:
+        room["debaters"][s]["ready"] = False
+    _touch(room, now, activity=True)
+
+
+def _begin_turn_prep(room: dict, now: datetime) -> None:
+    """A turn just became active: the speaking clock does NOT run yet — the
+    debater gets a prep window to tap the mic (turns/start)."""
+    room["turn_deadline_at"] = None
+    room["turn_prep_deadline_at"] = now + timedelta(seconds=config.PREP_SECONDS)
+
+
 def start_debate(room: dict, now: Optional[datetime] = None) -> None:
     now = now or now_utc()
     room["state"] = room["turn_order"][0]
     room["turn_index"] = 0
-    room["turn_deadline_at"] = now + timedelta(seconds=room["format"]["turn_seconds"])
+    _begin_turn_prep(room, now)
     _touch(room, now, activity=True)
 
 
@@ -146,10 +166,22 @@ def advance_turn(room: dict, now: Optional[datetime] = None) -> None:
     if room["turn_index"] >= len(room["turn_order"]):
         room["state"] = DELIBERATING
         room["turn_deadline_at"] = None
+        room["turn_prep_deadline_at"] = None
     else:
         room["state"] = room["turn_order"][room["turn_index"]]
-        room["turn_deadline_at"] = now + timedelta(seconds=room["format"]["turn_seconds"])
+        _begin_turn_prep(room, now)
     _touch(room, now)
+
+
+def start_turn(room: dict, now: Optional[datetime] = None) -> None:
+    """The debater tapped the mic: the speaking clock starts NOW (server-stamped).
+    Idempotent — a second tap / duplicate request changes nothing."""
+    now = now or now_utc()
+    if room["turn_deadline_at"] is not None:
+        return
+    room["turn_deadline_at"] = now + timedelta(seconds=room["format"]["turn_seconds"])
+    room["turn_prep_deadline_at"] = None
+    _touch(room, now, activity=True)
 
 
 def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
@@ -259,11 +291,13 @@ def reconcile(room: dict, now: Optional[datetime] = None) -> bool:
     now = now or now_utc()
     changed = False
 
-    # No-show forfeits (bounded loop).
+    # No-show forfeits (bounded loop). Two clocks can expire a turn: the prep
+    # window (never tapped the mic) or the speaking deadline (started, never
+    # submitted).
     for _ in range(len(room["turn_order"]) + 1):
         if not is_turn_state(room["state"]):
             break
-        deadline = room["turn_deadline_at"]
+        deadline = room["turn_deadline_at"] or room["turn_prep_deadline_at"]
         if not deadline:
             break
         overdue = now > deadline + timedelta(seconds=config.NOSHOW_GRACE_SECONDS)
@@ -328,6 +362,8 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "turn_index": room["turn_index"],
         "current_turn": current_turn(room),
         "turn_deadline_at": _iso(room["turn_deadline_at"]),
+        "turn_prep_deadline_at": _iso(room.get("turn_prep_deadline_at")),
+        "turn_started": room["turn_deadline_at"] is not None,
         "turns": turns,
         "finish_requested": room["finish_requested"],
         "both_ready": both_ready(room),

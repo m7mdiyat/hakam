@@ -38,6 +38,16 @@ export const api = {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ name, claim }),
     }).then(handle),
 
+  setFormat: (code, token, roundsPerSide) =>
+    fetch(`${API}/rooms/${code}/format`, {
+      method: 'POST', headers: jsonHeaders(token),
+      body: JSON.stringify({ rounds_per_side: roundsPerSide }),
+    }).then(handle),
+
+  // Start the server-stamped speaking clock (fired when the mic is tapped).
+  startTurn: (code, token) =>
+    fetch(`${API}/rooms/${code}/turns/start`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
+
   ready: (code, token, want = true) =>
     fetch(`${API}/rooms/${code}/ready`, {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ ready: want }),

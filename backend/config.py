@@ -39,6 +39,12 @@ CORS_ORIGINS = os.environ.get(
 # --- Debate format (server-authoritative) -----------------------------------
 TURN_SECONDS = _int("HAKAM_TURN_SECONDS", 120)
 ROUNDS_PER_SIDE = _int("HAKAM_ROUNDS_PER_SIDE", 2)
+# Room creators may pick a per-room round count from this set (lobby selector).
+ROUNDS_CHOICES = (1, 2, 3)
+# The speaking clock starts when the debater taps the mic (turns/start); this
+# prep window bounds how long they can sit on an unstarted turn before it
+# forfeits — otherwise a no-show could hold the room hostage.
+PREP_SECONDS = _int("HAKAM_PREP_SECONDS", 120)
 
 # --- Timer / lifecycle grace values -----------------------------------------
 # Hard server cap: a turn upload is rejected after deadline + this many seconds.

@@ -159,9 +159,9 @@ def _fake_judge_generate(prompt, schema, **kw):
     if "النتائج النهائية المحسومة" in prompt:  # synthesis call
         prof = {"strongest_ar": "قوي", "weakest_ar": "ضعيف", "tip_ar": "نصيحة"}
         return {"key_moment": {"turn": "t2", "segment_ids": ["t2-01"],
-                               "description_ar": "لحظة الانفعال"},
+                               "description_ar": "انفعال المتحدث «ب» وخروجه عن الموضوع."},
                 "profiles": {"a": prof, "b": prof},
-                "reasoning_ar": "حجج الطرف الفائز كانت أرصن."}
+                "reasoning_ar": "حسم المتحدث «أ» المناظرة بوضوح."}
     # Which label is real A? The claims block pins real A's claim to a label.
     a_label = "a" if "«أ»: الدعوى الأولى" in prompt else "b"
     b_label = "b" if a_label == "a" else "a"
@@ -185,7 +185,13 @@ def _fake_judge_generate(prompt, schema, **kw):
 
 
 def test_full_judging_flow(client, monkeypatch):
-    monkeypatch.setattr("backend.judge.generate_json", _fake_judge_generate)
+    prompts = []
+
+    def spy(prompt, schema, **kw):
+        prompts.append(prompt)
+        return _fake_judge_generate(prompt, schema, **kw)
+
+    monkeypatch.setattr("backend.judge.generate_json", spy)
     code, token_a, _ = _full_debate(client, monkeypatch)
     monkeypatch.setattr(config, "GEMINI_ENABLED", True)
 
@@ -210,6 +216,13 @@ def test_full_judging_flow(client, monkeypatch):
     assert v["emotionality"] == {"a": 20, "b": 45}
     assert v["key_moment"]["turn"] == "turn_b1"
     assert v["diagnostics"]["probes_valid"] == 4
+
+    # Anonymization boundary: real names NEVER reach any model prompt…
+    assert all("أحمد" not in p and "سارة" not in p for p in prompts)
+    # …but the human-facing narrative is de-anonymized after generation.
+    assert v["reasoning_ar"] == "حسم أحمد المناظرة بوضوح."
+    assert "سارة" in v["key_moment"]["description_ar"]
+    assert "«ب»" not in v["key_moment"]["description_ar"]
 
     # Idempotent: re-triggering does not re-judge a done room.
     again = _json(client.post(f"/api/rooms/{code}/judge",
