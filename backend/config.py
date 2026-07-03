@@ -65,6 +65,35 @@ ALLOWED_AUDIO_MIMES = ("audio/webm", "audio/mp4", "audio/ogg", "audio/mpeg", "au
 CREATE_RATE_LIMIT = _int("HAKAM_CREATE_RATE_LIMIT", 6)
 CREATE_RATE_WINDOW_SECONDS = _int("HAKAM_CREATE_RATE_WINDOW_SECONDS", 60)
 
+# --- Gemini via Vertex AI (Phase 2) ------------------------------------------
+# Auth = Application Default Credentials, exactly like Firestore/GCS: the Cloud
+# Run runtime service account in production (needs roles/aiplatform.user), your
+# gcloud ADC locally. No API key anywhere — nothing to leak, rotate, or store.
+GEMINI_MODEL = os.environ.get("HAKAM_GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_TIMEOUT_S = _int("HAKAM_GEMINI_TIMEOUT_S", 60)
+# "global" routes to wherever the model has capacity (Gemini isn't hosted in
+# me-central1); pin a specific region via env if data residency ever demands it.
+VERTEX_LOCATION = os.environ.get("HAKAM_VERTEX_LOCATION", "global")
+# Gate for all model calls: on by default in cloud mode, opt-in locally (local
+# calls need ADC — see .env.example). Off => transcript stays null, Phase-1
+# flows and tests run untouched.
+GEMINI_ENABLED = os.environ.get(
+    "HAKAM_GEMINI_ENABLED", "" if LOCAL_MODE else "1"
+).strip().lower() in ("1", "true", "yes")
+TRANSCRIBE_ENABLED = GEMINI_ENABLED
+
+# --- Transcription queue (Cloud Tasks) ---------------------------------------
+# Turn uploads enqueue transcription instead of blocking the uploader; the queue
+# POSTs back to /api/internal/transcribe with an OIDC token minted for TASKS_SA,
+# which the endpoint verifies (the service itself is public). LOCAL_MODE uses a
+# plain background thread instead — no queue, no GCP.
+TASKS_QUEUE = os.environ.get("HAKAM_TASKS_QUEUE", "hakam-transcribe")
+TASKS_SA_EMAIL = os.environ.get("HAKAM_TASKS_SA_EMAIL", "")
+# This service's own public URL — the queue's target and the OIDC audience.
+SELF_URL = os.environ.get(
+    "HAKAM_SELF_URL", "https://hakam-176728126674.me-central1.run.app"
+).rstrip("/")
+
 # --- Local dev paths --------------------------------------------------------
 _ROOT = Path(__file__).resolve().parent.parent
 LOCAL_STORE_DIR = Path(os.environ.get("HAKAM_LOCAL_STORE_DIR", _ROOT / ".localstore"))

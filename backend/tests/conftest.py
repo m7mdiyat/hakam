@@ -12,6 +12,7 @@ os.environ["HAKAM_LOCAL"] = "1"
 os.environ["HAKAM_LOCAL_STORE_DIR"] = os.path.join(_tmp, "store")
 os.environ["HAKAM_LOCAL_AUDIO_DIR"] = os.path.join(_tmp, "audio")
 os.environ["HAKAM_CREATE_RATE_LIMIT"] = "1000"  # each test creates a room
+os.environ["HAKAM_GEMINI_ENABLED"] = "0"  # model calls stay off unless a test patches it
 
 
 @lru_cache(maxsize=None)

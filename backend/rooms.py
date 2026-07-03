@@ -241,9 +241,15 @@ def submit_turn(code):
         ):
             raise ApiError(409, "turn_expired", "انتهى وقت الجولة.")
         S.record_turn(r, side, audio_uri, duration_ms, content_type,
-                      m4a_uri=m4a_uri, duration_s=duration_s, now=S.now_utc())
+                      m4a_uri=m4a_uri, duration_s=duration_s,
+                      transcribe_pending=config.TRANSCRIBE_ENABLED, now=S.now_utc())
 
-    return _view(get_store().update(normalize_code(code), mut))
+    room = get_store().update(normalize_code(code), mut)
+    # After the turn is committed (opponent's poll already sees the new state):
+    # hand transcription to the background queue — the uploader never waits on it.
+    from .tasks import enqueue_transcription
+    enqueue_transcription(normalize_code(code), turn_key)
+    return _view(room)
 
 
 @api.get("/rooms/<code>")
@@ -262,6 +268,24 @@ def finish(code):
         S.request_finish(r, side, S.now_utc())
 
     return _view(get_store().update(normalize_code(code), mut))
+
+
+@api.post("/internal/transcribe")
+def internal_transcribe():
+    """Cloud Tasks worker target. Public URL, private in practice: requires the
+    queue's OIDC token (audience = this service, email = the tasks SA)."""
+    from .tasks import verify_task_oidc
+    if not verify_task_oidc(request.headers.get("Authorization", "")):
+        raise ApiError(403, "forbidden", "غير مصرّح.")
+    body = _body()
+    code = normalize_code(str(body.get("code", "")))
+    turn_key = str(body.get("turn", ""))
+    if not code or not turn_key:
+        raise ApiError(400, "invalid_input", "code و turn مطلوبان.")
+    from .transcribe import transcribe_turn
+    status = transcribe_turn(code, turn_key)
+    # 5xx tells Cloud Tasks to back off and retry; ok/skipped are terminal.
+    return jsonify({"status": status}), 500 if status == "failed" else 200
 
 
 @api.get("/rooms/<code>/turns/<turn>/audio")

@@ -240,6 +240,17 @@ export function mountDebate(root, ctx) {
     }).join('');
   }
 
+  // Live transcript: the poll re-renders this panel, so text appears as the
+  // background transcription of each turn completes.
+  function transcriptHtml(t) {
+    const tr = t.transcript;
+    if (!tr || t.forfeited) return '';
+    if (tr.status === 'pending') return '<div class="turn-text turn-text-dim">جارٍ نسخ التسجيل…</div>';
+    if (tr.status === 'failed') return '<div class="turn-text turn-text-dim">تعذّر نسخ هذه الجولة</div>';
+    const text = (tr.segments || []).map((s) => esc(s.text)).join(' ');
+    return text ? `<div class="turn-text">${text}</div>` : '';
+  }
+
   function renderTurns(state) {
     if (!state.turns.length) {
       turnsEl.innerHTML = '<div class="turns-empty">لم تُسجَّل أي جولة بعد.</div>';
@@ -250,10 +261,12 @@ export function mountDebate(root, ctx) {
       const right = t.forfeited
         ? '<span class="turn-forfeit">لم تُسجَّل</span>'
         : `<button class="turn-play" data-play="${t.turn}" aria-label="تشغيل">${playIcon(15)}</button>`;
-      return `<div class="turn-bubble">
-        <div class="turn-meta"><span class="turn-name turn-${t.debater}">${esc(name)}</span>
-          <span class="micro-2">${roundShort(roundOf(t.turn))} ${sideLetter(t.debater)}</span></div>
-        ${right}</div>`;
+      return `<div class="turn-bubble turn-bubble-col">
+        <div class="turn-row">
+          <div class="turn-meta"><span class="turn-name turn-${t.debater}">${esc(name)}</span>
+            <span class="micro-2">${roundShort(roundOf(t.turn))} ${sideLetter(t.debater)}</span></div>
+          ${right}</div>
+        ${transcriptHtml(t)}</div>`;
     }).join('');
     markPlaying();
   }

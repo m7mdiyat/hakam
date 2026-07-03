@@ -155,12 +155,15 @@ def advance_turn(room: dict, now: Optional[datetime] = None) -> None:
 def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
                 content_type: str, m4a_uri: Optional[str] = None,
                 duration_s: Optional[float] = None,
+                transcribe_pending: bool = False,
                 now: Optional[datetime] = None) -> None:
     """Append a real (recorded) turn for `side` and advance. Caller has validated turn.
 
     `m4a_uri`/`duration_s` come from the upload-time ffmpeg transcode: the canonical
     mono-AAC rendition (what clients play and Gemini reads) and its authoritative
-    duration. None only when ffmpeg is unavailable (bare local dev)."""
+    duration. None only when ffmpeg is unavailable (bare local dev).
+    `transcribe_pending` marks the turn as awaiting the transcription worker
+    (the caller enqueues it after this update commits)."""
     now = now or now_utc()
     turn_key = current_turn(room)
     room["turns"].append({
@@ -172,7 +175,8 @@ def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
         "duration_ms": int(duration_ms),
         "duration_s": duration_s,
         "forfeited": False,
-        "transcript": None,  # Phase 2
+        "transcript": {"status": "pending", "segments": [], "attempts": 0}
+        if transcribe_pending else None,
         "created_at": now,
     })
     _touch(room, now, activity=True)
