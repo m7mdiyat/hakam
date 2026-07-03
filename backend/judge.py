@@ -494,14 +494,29 @@ def _run_synthesis(room: dict, merged: dict) -> dict:
 # --------------------------------------------------------------------------
 # Entry points
 # --------------------------------------------------------------------------
+def _needs_transcript(t: dict) -> bool:
+    return bool(t.get("audio_uri")) and not t.get("forfeited") \
+        and (t.get("transcript") or {}).get("status") != "ok"
+
+
 def build_verdict(room: dict) -> dict:
-    # Preflight: last-chance inline transcription for any missing transcript
-    # (queue task lost/still failing). Forfeited turns are fine as-is.
+    # Preflight. The final turn's queue transcription is usually still in
+    # flight when judging starts (the same upload request triggers both), so
+    # WAIT for pending transcripts briefly instead of re-transcribing in a
+    # race with the queue worker (double model calls, last-writer-wins).
+    import time
+    deadline = time.time() + 25
+    while time.time() < deadline and any(
+            (t.get("transcript") or {}).get("status") == "pending"
+            for t in room["turns"] if _needs_transcript(t)):
+        time.sleep(2)
+        room = get_store().get(room["code"]) or room
+
+    # Last-chance inline transcription only for what the queue never finished.
     from .transcribe import transcribe_turn
     retried = False
     for t in room["turns"]:
-        tr = t.get("transcript") or {}
-        if t.get("audio_uri") and not t.get("forfeited") and tr.get("status") != "ok":
+        if _needs_transcript(t):
             transcribe_turn(room["code"], t["turn"])
             retried = True
     if retried:

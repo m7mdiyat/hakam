@@ -248,16 +248,23 @@ def submit_turn(code):
     # (see audio.py for why). In production ffmpeg always exists; an unreadable
     # upload is the client's problem, not a 500.
     from .audio import TranscodeError, ffmpeg_available, transcode_to_m4a
-    m4a_data, duration_s = None, None
+    m4a_data, duration_s, audio_stats = None, None, None
     if ffmpeg_available():
         try:
-            m4a_data, duration_s = transcode_to_m4a(data, content_type)
+            m4a_data, duration_s, audio_stats = transcode_to_m4a(data, content_type)
         except TranscodeError:
             raise ApiError(400, "bad_audio", "تعذّرت قراءة التسجيل الصوتي.")
         # The byte cap can't bound time (opus bitrate varies); the probed
         # duration can. UI stops at TURN_SECONDS; small grace for stop lag.
         if duration_s > config.TURN_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS:
             raise ApiError(400, "audio_too_long", "التسجيل أطول من مدة الجولة.")
+        # SPEECH GATE: a silent capture (dead mic) is rejected before it can
+        # reach storage, Gemini, or the judge — silent audio + a topic makes
+        # the model fabricate a transcript, and a fabricated transcript gets
+        # judged. The debater's clock keeps running; they can re-record.
+        if audio_stats["max_db"] < config.SILENCE_GATE_DB:
+            raise ApiError(400, "silent_audio",
+                           "لم يلتقط الميكروفون أي صوت — تحقق من الميكروفون وحاول مجددًا.")
         duration_ms = int(duration_s * 1000)
 
     from .storage import get_storage
@@ -278,7 +285,7 @@ def submit_turn(code):
         ):
             raise ApiError(409, "turn_expired", "انتهى وقت الجولة.")
         S.record_turn(r, side, audio_uri, duration_ms, content_type,
-                      m4a_uri=m4a_uri, duration_s=duration_s,
+                      m4a_uri=m4a_uri, duration_s=duration_s, audio_stats=audio_stats,
                       transcribe_pending=config.TRANSCRIBE_ENABLED, now=S.now_utc())
 
     room = get_store().update(normalize_code(code), mut)

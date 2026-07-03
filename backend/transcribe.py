@@ -11,6 +11,7 @@ thread; both call transcribe_turn(), which is idempotent per turn.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
 
@@ -114,6 +115,14 @@ def _write_transcript(code: str, turn_key: str, transcript: dict) -> None:
     get_store().update(code, mut)
 
 
+# A transcript must reach at least (real speech end - this slack) or it gets
+# one explicit continue-to-the-end retry; still short -> accepted but flagged
+# "degraded" and logged (partial truth beats none, and the flag is honest).
+COVERAGE_SLACK_S = 8.0
+
+log = logging.getLogger("hakam.transcribe")
+
+
 def transcribe_turn(code: str, turn_key: str) -> str:
     """Transcribe one recorded turn; returns final status ('ok'|'failed'|'skipped').
 
@@ -129,26 +138,51 @@ def transcribe_turn(code: str, turn_key: str) -> str:
     if (turn.get("transcript") or {}).get("status") == "ok":
         return "ok"
 
+    # Defense in depth behind the upload speech gate: silent audio must never
+    # reach the model — given silence + a topic it fabricates a transcript.
+    stats = turn.get("audio_stats") or {}
+    if stats and stats.get("max_db", 0.0) < config.SILENCE_GATE_DB:
+        _write_transcript(code, turn_key, {
+            "status": "failed", "segments": [], "model": config.GEMINI_MODEL,
+            "error": "silent audio (gate)",
+        })
+        return "failed"
+
     uri = turn.get("audio_m4a_uri") or turn["audio_uri"]
     mime = "audio/mp4" if turn.get("audio_m4a_uri") else turn.get("content_type", "audio/mp4")
     audio = get_storage().read(uri)
     prompt = TRANSCRIBE_PROMPT.format(topic=room.get("topic", ""))
+    speech_end = stats.get("speech_end_s")
 
     last_err = None
-    for attempt in range(2):  # one full retry on model/validation failure
+    short = False
+    for attempt in range(2):  # one full retry on failure OR under-coverage
         try:
+            extra = ""
+            if attempt == 1:
+                extra = "\nملاحظة: التزم بدقة بأزمنة البداية والنهاية ضمن مدة التسجيل وبترتيب زمني تصاعدي."
+                if short and speech_end:
+                    extra += (f"\nمهم جدًا: التسجيل يحتوي كلامًا حتى الثانية {speech_end:.0f}"
+                              " تقريبًا — انسخ الكلام كاملًا حتى نهايته ولا تتوقف قبل ذلك.")
             result = generate_json(
-                prompt if attempt == 0 else prompt
-                + "\nملاحظة: التزم بدقة بأزمنة البداية والنهاية ضمن مدة التسجيل وبترتيب زمني تصاعدي.",
+                prompt + extra,
                 TRANSCRIBE_SCHEMA,
                 parts=[audio_part(audio, mime)],
                 thinking_budget=0,
                 retries=0 if attempt else 1,
             )
             segments = normalize_segments(result.get("segments"), turn.get("duration_s"))
-            _write_transcript(code, turn_key, {
-                "status": "ok", "segments": segments, "model": config.GEMINI_MODEL,
-            })
+            short = bool(speech_end) and segments[-1]["end_s"] < speech_end - COVERAGE_SLACK_S
+            if short and attempt == 0:
+                last_err = SegmentError(
+                    f"coverage {segments[-1]['end_s']:.0f}s < speech end {speech_end:.0f}s")
+                continue
+            transcript = {"status": "ok", "segments": segments, "model": config.GEMINI_MODEL}
+            if short:  # retried and still short: keep the partial, say so
+                transcript["degraded"] = "tail_missing"
+                log.warning("transcript for %s/%s still short after retry: ends %.0fs, speech %.0fs",
+                            code, turn_key, segments[-1]["end_s"], speech_end)
+            _write_transcript(code, turn_key, transcript)
             return "ok"
         except (GeminiError, SegmentError) as e:
             last_err = e

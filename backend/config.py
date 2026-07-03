@@ -64,6 +64,11 @@ MAX_AUDIO_BYTES = _int("HAKAM_MAX_AUDIO_BYTES", 12 * 1024 * 1024)
 # TURN_SECONDS + this grace. Keeping turns short is also what keeps Phase-2
 # transcript timestamps accurate (drift grows with clip length).
 AUDIO_DURATION_GRACE_SECONDS = _int("HAKAM_AUDIO_DURATION_GRACE_SECONDS", 10)
+# Speech gate: uploads whose PEAK volume is below this are rejected outright —
+# a dead mic capture measures ~-91 dB; whispered speech peaks far above -50.
+# Silence must never reach Gemini: given silent audio + a debate topic, the
+# model FABRICATES a transcript, and the judge would judge speech nobody made.
+SILENCE_GATE_DB = _int("HAKAM_SILENCE_GATE_DB", -50)
 ALLOWED_AUDIO_MIMES = ("audio/webm", "audio/mp4", "audio/ogg", "audio/mpeg", "audio/aac")
 
 # --- Rate limiting ----------------------------------------------------------

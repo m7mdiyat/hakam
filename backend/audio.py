@@ -72,8 +72,54 @@ def probe_duration_s(path: Path) -> float:
         raise TranscodeError("ffprobe returned no duration") from e
 
 
-def transcode_to_m4a(data: bytes, content_type: str) -> "tuple[bytes, float]":
-    """Original upload bytes -> (canonical m4a bytes, duration in seconds).
+import re
+
+_VOL_RE = re.compile(r"(mean|max)_volume:\s*(-?[\d.]+)\s*dB")
+_SIL_RE = re.compile(r"silence_(start|end):\s*(-?[\d.]+)")
+
+
+def analyze_audio(path: Path, duration_s: float) -> dict:
+    """One ffmpeg pass -> {max_db, mean_db, speech_end_s}.
+
+    max_db is the speech gate's input: a dead mic capture measures around
+    -91 dB while even whispered speech peaks far above -50 dB (forensics from
+    real debates: silent turns -91, quietest real turn -6). speech_end_s is
+    where audible content actually stops — the transcription coverage check
+    compares the transcript's end against it, so a model that stops
+    transcribing mid-speech gets caught.
+    """
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(path),
+         "-af", "volumedetect,silencedetect=n=-40dB:d=1.5", "-f", "null", "-"],
+        capture_output=True, timeout=TRANSCODE_TIMEOUT_S, text=True,
+    )
+    out = proc.stderr or ""
+    vols = {m.group(1): float(m.group(2)) for m in _VOL_RE.finditer(out)}
+    events = [(m.group(1), float(m.group(2))) for m in _SIL_RE.finditer(out)]
+    # Pair events into silence intervals (silencedetect emits a closing
+    # silence_end at EOF, so a trailing silence is a normal closed interval).
+    silences, open_start = [], None
+    for kind, ts in events:
+        if kind == "start":
+            open_start = max(0.0, ts)
+        elif open_start is not None:
+            silences.append((open_start, ts))
+            open_start = None
+    if open_start is not None:
+        silences.append((open_start, duration_s))
+    # Speech ends where a final silence interval reaching EOF begins.
+    speech_end = duration_s
+    if silences and silences[-1][1] >= duration_s - 0.5:
+        speech_end = silences[-1][0]
+    return {
+        "max_db": vols.get("max", 0.0),
+        "mean_db": vols.get("mean", 0.0),
+        "speech_end_s": round(max(0.0, min(speech_end, duration_s)), 2),
+    }
+
+
+def transcode_to_m4a(data: bytes, content_type: str) -> "tuple[bytes, float, dict]":
+    """Original upload bytes -> (canonical m4a bytes, duration s, audio stats).
 
     Raises TranscodeError if the input is unreadable — callers treat that as a
     bad upload, not a server error.
@@ -88,4 +134,5 @@ def transcode_to_m4a(data: bytes, content_type: str) -> "tuple[bytes, float]":
         if not m4a:
             raise TranscodeError("ffmpeg produced empty output")
         # Duration measured on the artifact clients actually seek in.
-        return m4a, probe_duration_s(dst)
+        duration = probe_duration_s(dst)
+        return m4a, duration, analyze_audio(dst, duration)

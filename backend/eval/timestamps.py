@@ -34,7 +34,7 @@ WITHIN_S = 2.0  # acceptance window around a true sentence start
 
 
 def transcribe_bytes(data: bytes, content_type: str, topic: str) -> "tuple[list, float]":
-    m4a, duration_s = transcode_to_m4a(data, content_type)
+    m4a, duration_s, _stats = transcode_to_m4a(data, content_type)
     result = generate_json(
         TRANSCRIBE_PROMPT.format(topic=topic),
         TRANSCRIBE_SCHEMA,

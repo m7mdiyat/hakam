@@ -187,6 +187,7 @@ def start_turn(room: dict, now: Optional[datetime] = None) -> None:
 def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
                 content_type: str, m4a_uri: Optional[str] = None,
                 duration_s: Optional[float] = None,
+                audio_stats: Optional[dict] = None,
                 transcribe_pending: bool = False,
                 now: Optional[datetime] = None) -> None:
     """Append a real (recorded) turn for `side` and advance. Caller has validated turn.
@@ -206,6 +207,7 @@ def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
         "content_type": content_type,
         "duration_ms": int(duration_ms),
         "duration_s": duration_s,
+        "audio_stats": audio_stats,  # {max_db, mean_db, speech_end_s} from upload
         "forfeited": False,
         "transcript": {"status": "pending", "segments": [], "attempts": 0}
         if transcribe_pending else None,

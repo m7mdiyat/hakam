@@ -32,6 +32,21 @@ def make_tone(seconds: float, fmt: str) -> bytes:
             return f.read()
 
 
+@lru_cache(maxsize=None)
+def make_silence(seconds: float) -> bytes:
+    """A dead-mic capture: digital silence in webm/opus (the EY52EC scenario)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "silence.webm")
+        subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+             "-t", str(seconds), "-c:a", "libopus", out],
+            check=True, capture_output=True, timeout=120,
+        )
+        with open(out, "rb") as f:
+            return f.read()
+
+
 @pytest.fixture(scope="session")
 def client():
     from backend.app import app
