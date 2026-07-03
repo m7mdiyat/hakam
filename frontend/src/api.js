@@ -46,6 +46,10 @@ export const api = {
   finish: (code, token) =>
     fetch(`${API}/rooms/${code}/finish`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
 
+  // Retrigger judging (idempotent; server lease decides whether to run).
+  judge: (code, token) =>
+    fetch(`${API}/rooms/${code}/judge`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
+
   submitTurn: (code, token, blob, durationMs) => {
     const fd = new FormData();
     const ext = (blob.type.split('/')[1] || 'webm').split(';')[0];
