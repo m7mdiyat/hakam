@@ -1,4 +1,4 @@
-# CLAUDE.md — Hakam (حَكَم)
+# CLAUDE.md — Hakam (الحَكَم)
 
 Arabic AI debate judge. Two people join a room via invite link, each states a claim, they debate in timed recorded voice turns, and Gemini judges the arguments — logic, fallacies, emotionality — delivering a structured verdict (الحُكْم).
 
@@ -24,7 +24,7 @@ Arabic AI debate judge. Two people join a room via invite link, each states a cl
 
 Frontend and backend are hosted separately — this replaced the original single-origin plan:
 
-- **Frontend** → GitHub Pages at `thehakam.com`, built + published by `.github/workflows/deploy-pages.yml` on push to `main` touching `frontend/**`. `frontend/public/CNAME` = `thehakam.com`; Vite `base: '/'` (custom apex domain). SPA deep links (`/j/CODE`, `/r/CODE`) survive a direct load/refresh via `frontend/public/404.html` + a decode snippet in `index.html` (GitHub Pages has no server-side routing).
+- **Frontend** → GitHub Pages at `thehakam.com`, built + published by `.github/workflows/deploy-pages.yml` on push to `main` touching `frontend/**`. `frontend/public/CNAME` = `thehakam.com`; Vite `base: '/'` (custom apex domain). SPA deep links (`/j/CODE`, `/r/CODE`) survive a direct load/refresh via `frontend/public/404.html` + a decode snippet in `index.html` (GitHub Pages has no server-side routing). **Live** at `https://thehakam.com` — apex `A`/`AAAA` records point at GitHub Pages, custom domain + **Enforce HTTPS** active (`http://` → 301 `https://`); `www` CNAMEs to `m7mdiyat.github.io`.
 - **Backend** → API-only Flask on Cloud Run: serves `/api/*` + `/health`, and **302-redirects every other path to `HAKAM_FRONTEND_URL`** (default `https://thehakam.com`), preserving path + query so old Cloud-Run links map over. The Dockerfile no longer builds or serves the SPA.
 - **Backend URL** (frontend build var): `frontend/src/api.js` calls `${VITE_API_BASE_URL}/api/...`. `frontend/.env.production` = Cloud Run URL (`https://hakam-176728126674.me-central1.run.app`), `frontend/.env.development` = `http://localhost:8080`, empty = relative `/api`. These `.env.*` hold only public URLs and ARE committed.
 - **CORS** (flask-cors in `backend/app.py`): scoped to `/api/*`, restricted to `HAKAM_CORS_ORIGINS` (default `https://thehakam.com,http://localhost:5173`). Reflects the matching origin — **never `*`** — and handles preflight + the `X-Debater-Token` header; `supports_credentials=False` (bearer token in a header, no cookies).
@@ -68,7 +68,7 @@ Each debater gets a random token at create/join, sent as `X-Debater-Token` heade
 
 ## Frontend screens (match /design exports exactly)
 
-1. Landing — wordmark حَكَم, tagline «لتكن الحُجّة هي الفيصل», topic input, create CTA, join-by-code link
+1. Landing — wordmark الحَكَم (definite article, matches thehakam.com; keep the fatḥas — distinct from الحُكْم "verdict"), tagline «لتكن الحُجّة هي الفيصل», topic input, create CTA, join-by-code link
 2. Lobby — invite link + copy, two debater claim cards (teal/coral), format row, ready gating
 3. Live debate — pinned claim chips, circular countdown, hold-to-record mic, live transcript feed, turn progress dots, mutual finish request
 4. Verdict — hero verdict card (brass), radar chart both debaters (Chart.js), emotionality meters, fallacy receipt cards, نقاط بلا رد, اللحظة الفاصلة, tip cards, share + rematch
