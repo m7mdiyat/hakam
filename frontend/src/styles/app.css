@@ -486,7 +486,7 @@ button { font-family: inherit; }
   background: transparent; border: none; cursor: pointer; padding: 0;
   font-size: 12.5px; font-weight: 600; color: var(--muted); font-family: inherit;
 }
-.v-collapse-head .chev { transition: transform 0.15s; color: var(--muted-2); }
+.v-collapse-head .chev { transition: transform 0.15s; color: var(--gold); font-size: 15px; line-height: 1; }
 .v-collapse-head.open .chev { transform: rotate(180deg); }
 .v-collapse-body { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .tr-turn { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line-06); padding-top: 12px; }
