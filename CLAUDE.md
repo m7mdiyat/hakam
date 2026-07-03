@@ -11,7 +11,7 @@ Arabic AI debate judge. Two people join a room via invite link, each states a cl
 
 ## Stack
 
-- Frontend: Vite vanilla JS SPA (no framework), Arabic RTL (`<html dir="rtl" lang="ar">`), self-hosted variable Readex Pro (woff2 unicode-range subsets in `frontend/public/fonts/`)
+- Frontend: Vite vanilla JS SPA (no framework), Arabic RTL (`<html dir="rtl" lang="ar">`). Fonts (self-hosted woff2 unicode-range subsets in `frontend/public/fonts/`): **IBM Plex Sans Arabic for all UI text** (Readex Pro's compact isolated ع reads as a broken letter to users — user decision 2026-07-03, supersedes the design file's font), **Readex Pro for the brand wordmark only** (`--font-brand` on `.wordmark`/`.brand-name`)
 - Visual spec: `design/hakam-design.html` (source of truth) + `design/NOTES.md` (extracted tokens) — dark ink background, brass/gold accent (verdict + primary CTAs only), Debater A = teal, Debater B = coral, everywhere and consistently
 - Backend: Python Flask on Cloud Run
 - Room state: Firestore (native mode), `rooms` collection — never in-memory (Cloud Run instances restart/scale)
