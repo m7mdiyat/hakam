@@ -107,7 +107,7 @@ export function mountDebate(root, ctx) {
   function startRecTick() {
     recStartedAt = performance.now();
     const paint = () => {
-      micLabel.textContent = `جارٍ التسجيل… ${fmtClock(performance.now() - recStartedAt)}`;
+      micLabel.textContent = `جارٍ التسجيل ${fmtClock(performance.now() - recStartedAt)} — اضغط للإرسال`;
     };
     paint();
     recTick = setInterval(paint, 500);
@@ -122,8 +122,9 @@ export function mountDebate(root, ctx) {
     micBtn.className = `mic mic-${kind} mic-${mine}`;
     micBtn.style.setProperty('--mic-color', sideColor(mine));
     if (kind === 'recording') {
-      micGlyph.innerHTML = micIcon(34, sideInk(mine), 1.8);
-      micLabel.textContent = 'جارٍ التسجيل… ارفع إصبعك للإرسال';
+      // Stop-square glyph on the solid fill: the button now reads "tap to stop".
+      micGlyph.innerHTML = stopIcon(30, sideInk(mine));
+      micLabel.textContent = 'جارٍ التسجيل…';
       micLabel.style.color = sideColor(mine);
     } else if (kind === 'uploading') {
       micGlyph.innerHTML = micIcon(34, sideColor(mine), 1.8);
@@ -137,7 +138,7 @@ export function mountDebate(root, ctx) {
       micLabel.style.color = 'var(--muted)';
     } else {
       micGlyph.innerHTML = micIcon(34, sideColor(mine), 1.8);
-      micLabel.textContent = 'اضغط مطوّلاً للتحدث';
+      micLabel.textContent = 'اضغط للتحدث';
       micLabel.style.color = 'var(--muted)';
     }
   }
@@ -176,16 +177,15 @@ export function mountDebate(root, ctx) {
   }
 
   // Terminal no-upload outcomes (too short / canceled / empty / error). Without
-  // this reset a sub-400ms tap used to wedge `recording=true` forever — the orb
+  // this reset a discarded take would wedge `recording=true` forever — the orb
   // stuck on «جارٍ التسجيل» with every tap ignored.
   function onDiscarded(reason) {
     recording = false;
     refreshMic();
-    if (reason === 'too_short') toast('اضغط مطوّلاً أثناء التحدث ثم ارفع إصبعك');
+    if (reason === 'too_short') toast('التسجيل قصير جدًا — حاول مجددًا');
     else if (reason === 'empty' || reason === 'error') toast('تعذّر التسجيل — حاول مجددًا');
   }
   function stopRec() { if (recording && rec) rec.stop(); }
-  function cancelRec() { if (recording && rec) { recording = false; rec.cancel(); refreshMic(); } }
 
   async function onRecorded(blob, durationMs) {
     recording = false;
@@ -202,17 +202,13 @@ export function mountDebate(root, ctx) {
     }
   }
 
-  // Pointer press = hold to record; release = send; cancel = discard.
-  function onPointerDown(e) {
-    if (micBtn.disabled) return;
-    e.preventDefault();
-    window.addEventListener('pointerup', onPointerUp, { once: true });
-    window.addEventListener('pointercancel', onPointerCancel, { once: true });
-    startRec();
-  }
-  function onPointerUp() { window.removeEventListener('pointercancel', onPointerCancel); stopRec(); }
-  function onPointerCancel() { window.removeEventListener('pointerup', onPointerUp); cancelRec(); }
-  micBtn.addEventListener('pointerdown', onPointerDown);
+  // Tap to toggle: one press starts recording, the next press stops and sends.
+  // (The server-side deadline still auto-stops via TurnRecorder's maxMs timer.)
+  micBtn.addEventListener('click', () => {
+    if (micBtn.disabled || uploading) return;
+    if (recording) stopRec();
+    else startRec();
+  });
   micBtn.addEventListener('contextmenu', (e) => e.preventDefault());
 
   // --- recorded-turn playback -------------------------------------------

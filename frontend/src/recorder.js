@@ -1,4 +1,5 @@
-// Hold-to-record wrapper around MediaRecorder.
+// Turn-recording wrapper around MediaRecorder (gesture-agnostic: the debate
+// screen drives it tap-to-toggle — one tap starts, the next stops and sends).
 // Feature-detects mimeType: audio/webm (Chrome/Android) or audio/mp4 (iOS Safari).
 
 const MIME_CANDIDATES = [
