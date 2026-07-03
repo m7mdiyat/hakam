@@ -61,7 +61,7 @@ Each debater gets a random token at create/join, sent as `X-Debater-Token` heade
 - temperature 0, Gemini structured output (`responseSchema`), Arabic output
 - Position-bias control: run the judgment twice with speaker order swapped. Same winner → confident verdict. Winner flips → verdict is «متقاربة» (draw-ish), say so honestly
 - Schema field order: all analysis fields first, `winner` and `margin` LAST (reason before deciding)
-- Per-debater 0–100 scores on 7 axes: الاتساق المنطقي، قوة الاستدلال، الصلة بالموضوع، جودة الرد، العقلانية، الوضوح، النزاهة الحجاجية
+- Per-debater 0–100 scores on 5 axes: الاتساق المنطقي، الالتزام بالموضوع، الرد على النقاط، الوضوح، الهدوء والعقلانية (قوة الاستدلال folded into الاتساق المنطقي؛ النزاهة الحجاجية dropped as a scored axis — it surfaces only via `fallacies[]` below)
 - `fallacies[]`: `{name_ar, name_en, quote, turn, severity, explanation_ar}` — quote must be verbatim from transcript
 - Also: `dropped_points[]` (arguments never answered), `key_moment`, strongest + weakest point per debater, one improvement tip per debater, `confidence`, `reasoning_ar` (2 sentences max)
 - Model IDs: Flash for transcription, Pro for judging — verify current model names against Gemini docs at build time, do not hardcode from memory
