@@ -49,6 +49,11 @@ POSTROLL_S = 1.0
 # Tier thresholds on the درجة الحجاج scale (Gate-3 priors).
 MARGIN_FORCED_CLOSE = 3.0
 MARGIN_HIGH = 7.0
+# A clear score gap tolerates ONE dissenting probe (fixes the strict-majority
+# rule wrongly declaring متقاربة at an 18.7-point margin when one probe tied
+# internally and one dissented). PLACEHOLDER threshold — tune against the
+# real-debate corpus; do not treat this number as final.
+MARGIN_DISSENT_TOLERANT = 15.0
 SPREAD_HIGH_MAX = 15.0      # axes spread still feeds instability
 SPREAD_CLOSE_MIN = 25.0
 MARGIN_BANDS = ((15.0, "decisive"), (7.0, "clear"), (3.0, "narrow"))
@@ -401,7 +406,20 @@ def collect_audit_flags(probes: list) -> list:
 # --------------------------------------------------------------------------
 # Scoring inputs (map + consensus -> scoring.py)
 # --------------------------------------------------------------------------
-def _severity_by_linkage(fallacy: dict, maps: dict) -> str:
+def _severity_final(fallacy: dict, maps: dict) -> str:
+    """Rule-derived severity.
+
+    Ad hominem is TONE-based (user calibration decision): probes judge the
+    tone (harsh insult -> medium, mild jab -> low; prompt says when in doubt
+    go LOWER), and the linkage rule does not apply — capped at medium, never
+    high. NOTE: tone is the least mechanically verifiable judgment in the
+    whole system — an explicit Gate-4 watch item in every fidelity review.
+
+    Every other type keeps linkage-derived severity: attacking a primary
+    argument -> high, secondary -> medium, free-floating -> low.
+    """
+    if fallacy["type"] == "ad_hominem":
+        return "medium" if fallacy.get("severity") in ("medium", "high") else "low"
     aid = fallacy.get("argument_id")
     if not aid:
         return "low"
@@ -467,7 +485,7 @@ def _probe_structured_winner(probe: dict, maps: dict) -> Optional[str]:
     scores = {}
     for side in ("a", "b"):
         # rule-derived severities on the probe's own items
-        fal = [{**f, "severity": _severity_by_linkage(f, maps)}
+        fal = [{**f, "severity": _severity_final(f, maps)}
                for f in probe["fallacies"]]
         scores[side] = compute_score(_score_inputs(
             side, maps, probe["evals"], fal, probe["soundness"]))["score"]
@@ -554,7 +572,13 @@ def decide_tier(votes: list, margin: float, score_winner: Optional[str],
         if votes.count(cand) > top_count:
             top_vote, top_count = cand, votes.count(cand)
     has_majority = top_count > valid_probes / 2
-    agree = has_majority and score_winner is not None and top_vote == score_winner
+    dissents = sum(1 for v in votes if score_winner is not None and v != score_winner)
+    agree = score_winner is not None and (
+        (has_majority and top_vote == score_winner)
+        # Interim tolerance: at a clear margin, one dissenting probe (or one
+        # internal tie) doesn't force متقاربة. Threshold is a tunable
+        # placeholder (MARGIN_DISSENT_TOLERANT), not a settled number.
+        or (margin >= MARGIN_DISSENT_TOLERANT and dissents <= 1))
     axes_conflict = (axes_lean is not None and score_winner is not None
                      and axes_lean != score_winner and margin < MARGIN_HIGH)
 
@@ -772,7 +796,7 @@ def build_verdict(room: dict) -> dict:
     arg_results = merge_arg_evals(probes, maps)
     fallacies, soundness = merge_findings(probes)
     for f in fallacies:  # severity is rule-derived from linkage
-        f["severity"] = _severity_by_linkage(f, maps)
+        f["severity"] = _severity_final(f, maps)
     axes_scores, axes_spread = merge_axes(probes, _inapplicable_axes(room))
 
     # Scores (consensus) + per-probe winner votes.

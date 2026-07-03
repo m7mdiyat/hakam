@@ -118,6 +118,36 @@ def test_tier_close_on_axes_structure_conflict_at_small_margin():
     assert tier == "close"
 
 
+def test_tier_margin_tolerates_single_dissent():
+    # The prod-smoke case: 18.7-point gap, one probe tied (abstained), one
+    # dissented -> no strict majority, but the margin tolerance holds the win.
+    tier, w = decide_tier(votes=["a", "a", "b"], margin=18.7, score_winner="a",
+                          axes_lean="a", spread=0, contested=0, incoherent=0,
+                          audits=0, repaired=False, valid_probes=4)
+    assert (tier, w) == ("medium", "a")
+    # Below the tolerance threshold the strict rule still applies.
+    tier, w = decide_tier(votes=["a", "a", "b"], margin=10, score_winner="a",
+                          axes_lean="a", spread=0, contested=0, incoherent=0,
+                          audits=0, repaired=False, valid_probes=4)
+    assert (tier, w) == ("close", None)
+    # Two dissents are never tolerated, whatever the margin.
+    tier, w = decide_tier(votes=["a", "b", "b"], margin=30, score_winner="a",
+                          axes_lean="a", spread=0, contested=0, incoherent=0,
+                          audits=0, repaired=False, valid_probes=4)
+    assert (tier, w) == ("close", None)
+
+
+def test_ad_hominem_severity_is_tone_based_and_capped():
+    from backend.judge import _severity_final
+    maps = {"a": _map("a"), "b": _map("b")}
+    harsh = {"type": "ad_hominem", "severity": "high", "argument_id": "b-1"}
+    mild = {"type": "ad_hominem", "severity": "low", "argument_id": "b-1"}
+    other = {"type": "straw_man", "severity": "low", "argument_id": "b-1"}
+    assert _severity_final(harsh, maps) == "medium"   # capped, never high
+    assert _severity_final(mild, maps) == "low"       # doubt goes lower
+    assert _severity_final(other, maps) == "high"     # others: linkage (primary)
+
+
 def test_tier_high_requires_clean_sweep():
     args = dict(votes=["a"] * 4, margin=20, score_winner="a", axes_lean="a",
                 spread=0, contested=0, incoherent=0, audits=0, repaired=False,
@@ -225,10 +255,10 @@ def test_full_v2_pipeline(client, monkeypatch):
     assert v["schema_version"] == 2
 
     # Scoring: A = 100·0.9 − 25·U(=1: ignored B's answerable arg) = 65.
-    #          B = 100·0.35 − 0 − (8 linked-high fallacy + 6 soundness) = 21.
-    assert v["score"] == {"a": 65.0, "b": 21.0}
+    #          B = 100·0.35 − 0 − (5 ad-hominem [tone-capped medium] + 6 soundness) = 24.
+    assert v["score"] == {"a": 65.0, "b": 24.0}
     assert (v["tier"], v["winner"]) == ("high", "a")
-    assert v["margin"]["value"] == 44.0 and v["margin"]["band"] == "decisive"
+    assert v["margin"]["value"] == 41.0 and v["margin"]["band"] == "decisive"
 
     # Section 1: anchors on quoted material, none on the implicit premise.
     arg_a = v["analysis"]["a"]["arguments"][0]
@@ -242,7 +272,7 @@ def test_full_v2_pipeline(client, monkeypatch):
 
     # Section 2: linked fallacy (rule-derived severity), soundness, registry.
     (card,) = v["fallacies"]
-    assert card["argument_id"] == "b-1" and card["severity"] == "high"
+    assert card["argument_id"] == "b-1" and card["severity"] == "medium"  # tone-capped
     assert card["audio"] is not None
     (snd,) = v["soundness"]
     assert snd["type"] == "unsupported_load_bearing" and snd["quotes"][0]["audio"]

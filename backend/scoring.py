@@ -16,11 +16,10 @@ External-claim truth affects nothing here (locked design decision): the judge
 cannot score on what it declined to verify. Lack of SUPPORT scores via the
 soundness deductions.
 
-All constants are Gate-3 priors. LINKED_FALLACY_FACTOR is the explicit
-calibration question: a fallacy linked to an argument already judged
-invalid/weak bills the same flaw twice (reduced credit + deduction) —
-1.0 keeps the double count (form defect and rhetorical foul are different
-offenses), 0.5 discounts it; Gate 3 runs the sweep both ways.
+All constants are Gate-3 priors. LINKED_FALLACY_FACTOR = 1.0 is a SETTLED
+calibration decision (user-approved): a fallacy linked to an argument that
+already scored negatively bills both penalties — the weak-argument verdict
+and the fallacy deduction are two distinct offenses.
 """
 from __future__ import annotations
 
