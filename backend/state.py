@@ -202,6 +202,41 @@ def _forfeit_current_turn(room: dict, now: datetime) -> None:
     advance_turn(room, now)
 
 
+# --- judging (Phase 2) -------------------------------------------------------
+def begin_judging(room: dict, now: Optional[datetime] = None) -> bool:
+    """Claim the judging lease. True iff this caller should run the pipeline.
+    Reclaimable when a previous run failed or its lease went stale (crashed
+    request / dropped client)."""
+    now = now or now_utc()
+    if room["state"] != DELIBERATING or room.get("verdict"):
+        return False
+    j = room.get("judging") or {}
+    if j.get("status") == "done":
+        return False
+    if j.get("status") == "running" and j.get("lease_at") is not None:
+        if (now - j["lease_at"]).total_seconds() < config.JUDGE_LEASE_SECONDS:
+            return False
+    room["judging"] = {"status": "running", "lease_at": now,
+                       "attempts": int(j.get("attempts", 0)) + 1, "error": None}
+    _touch(room, now)
+    return True
+
+
+def finish_judging(room: dict, verdict: dict, now: Optional[datetime] = None) -> None:
+    now = now or now_utc()
+    room["verdict"] = verdict
+    room["judging"] = {**(room.get("judging") or {}), "status": "done",
+                       "lease_at": None, "error": None}
+    _touch(room, now, activity=True)
+
+
+def fail_judging(room: dict, error: str, now: Optional[datetime] = None) -> None:
+    now = now or now_utc()
+    room["judging"] = {**(room.get("judging") or {}), "status": "failed",
+                       "lease_at": None, "error": error}
+    _touch(room, now)
+
+
 def request_finish(room: dict, side: str, now: Optional[datetime] = None) -> None:
     now = now or now_utc()
     room["finish_requested"][side] = True
@@ -296,6 +331,7 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "turns": turns,
         "finish_requested": room["finish_requested"],
         "both_ready": both_ready(room),
+        "judging_status": (room.get("judging") or {}).get("status"),
         "verdict": room["verdict"],
         "expires_at": _iso(room["expires_at"]),
         "server_now": _iso(now),

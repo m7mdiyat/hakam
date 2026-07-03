@@ -249,12 +249,24 @@ def submit_turn(code):
     # hand transcription to the background queue — the uploader never waits on it.
     from .tasks import enqueue_transcription
     enqueue_transcription(normalize_code(code), turn_key)
-    return _view(room)
+    # Last turn just landed -> the room is deliberating; judge it now.
+    return _view(_maybe_judge(room))
 
 
 @api.get("/rooms/<code>")
 def get_room(code):
     return _view(_load(code))
+
+
+def _maybe_judge(room: dict) -> dict:
+    """Run judging inline if this room is ready for it (idempotent: the lease
+    in state.begin_judging makes concurrent callers no-op). Both debaters'
+    clients poll every 2s and see «الحَكَم يراجع الحجج» while this runs."""
+    if (room["state"] == S.DELIBERATING and not room.get("verdict")
+            and config.GEMINI_ENABLED):
+        from .judge import run_judging
+        return run_judging(room["code"])
+    return room
 
 
 @api.post("/rooms/<code>/finish")
@@ -267,7 +279,18 @@ def finish(code):
             raise ApiError(409, "not_active", "لا يمكن طلب الإنهاء الآن.")
         S.request_finish(r, side, S.now_utc())
 
-    return _view(get_store().update(normalize_code(code), mut))
+    room = get_store().update(normalize_code(code), mut)
+    # Second finish flag flips the room to deliberating -> judge in-request.
+    return _view(_maybe_judge(room))
+
+
+@api.post("/rooms/<code>/judge")
+def judge_room(code):
+    """Client retrigger: fired when polling shows deliberating with judging
+    null/failed/stale (covers the forfeit entry path and crashed runs)."""
+    room = _load(code)
+    _require_side(room)
+    return _view(_maybe_judge(room))
 
 
 @api.post("/internal/transcribe")
