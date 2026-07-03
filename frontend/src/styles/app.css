@@ -13,7 +13,11 @@ html, body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-body { font-size: 15px; line-height: 1.5; }
+/* Weight 450 (variable axis, no synthesis): Readex Pro's ع/ح hairline joints
+   dissolve at small sizes under antialiased smoothing at 400 — 450 keeps the
+   letterforms intact everywhere without reading as bold. Explicit weights
+   (300/500/600/700) are unaffected. */
+body { font-size: 15px; line-height: 1.5; font-weight: 450; }
 button { font-family: inherit; }
 ::selection { background: rgba(201, 164, 92, 0.28); }
 
@@ -102,7 +106,9 @@ button { font-family: inherit; }
   padding: 0 18px;
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--line-12); border-radius: var(--r-btn);
-  font-size: 15px; font-family: inherit; outline: none;
+  /* 16px floor: sturdier Arabic letterforms AND stops iOS Safari's
+     auto-zoom on focused inputs below 16px. */
+  font-size: 16px; font-family: inherit; outline: none;
   transition: border-color 0.15s;
 }
 /* Readex Pro's isolated ع (e.g. «موضوع») has a hairline joint that dissolves
