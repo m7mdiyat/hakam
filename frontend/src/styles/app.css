@@ -112,6 +112,9 @@ button { font-family: inherit; }
 .input:focus { border-color: rgba(201, 164, 92, 0.5); }
 .textarea { height: auto; padding: 14px 18px; line-height: 1.7; resize: none; }
 .input-code { text-align: center; letter-spacing: 0.3em; text-transform: uppercase; }
+/* The 0.3em spacing is for the typed Latin code (XDCF76) — on the Arabic
+   placeholder it tears cursive joining apart («ر م ز  ا ل ج ل س ة»). */
+.input-code::placeholder { letter-spacing: normal; text-transform: none; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field .micro { padding-inline-start: 2px; }
 .form-error { color: var(--coral); font-size: 12.5px; }
