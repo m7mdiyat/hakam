@@ -28,7 +28,7 @@ function mountRoom(screen, ctx) {
   const c = creds.get(ctx.code);
   if (!c) { navigate(`/j/${ctx.code}`, { replace: true }); return null; }
   const view = createRoomView(screen, { ...ctx, creds: c });
-  const stop = startPolling(ctx.code, (s) => view.update(s), (e) => view.onError(e));
+  const stop = startPolling(ctx.code, c.token, (s) => view.update(s), (e) => view.onError(e));
   return { unmount() { stop(); view.unmount(); } };
 }
 

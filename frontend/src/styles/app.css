@@ -117,6 +117,29 @@ button { font-family: inherit; }
 .form-error { color: var(--coral); font-size: 12.5px; }
 .loading { color: var(--muted); font-size: 14px; }
 
+/* Debate: pinned topic + presence ------------------------------------------ */
+/* The topic stays visible while the debate body scrolls (sticky inside the
+   scrolling .screen-body, directly under the sticky header). */
+.debate-topic {
+  position: sticky; top: -8px;   /* cancels .screen-body's top padding */
+  z-index: 4;
+  margin: -8px -22px 0;          /* full-bleed strip over the scroll area */
+  padding: 10px 22px 8px;
+  background: var(--bg);
+  text-align: center;
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  line-height: 1.7;
+  border-bottom: 1px solid var(--line-06);
+}
+.chip-offline {
+  display: inline-block; width: auto;
+  font-size: 10px; font-weight: 600; color: var(--coral);
+  border: 1px solid var(--coral-line); border-radius: 999px;
+  padding: 1px 8px; margin-inline-start: 6px; vertical-align: 1px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.chip-away { opacity: 0.75; }
+
 /* Landing ----------------------------------------------------------------- */
 .landing { justify-content: center; gap: 40px; padding-top: 24px; }
 .hero { display: flex; flex-direction: column; align-items: center; gap: 14px; }
@@ -587,6 +610,7 @@ button { font-family: inherit; }
     display: grid;
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
     grid-template-areas:
+      "topic  topic"
       "chips  chips"
       "timer  transcript"
       "dots   transcript"
@@ -597,6 +621,8 @@ button { font-family: inherit; }
     align-items: start;
     align-content: start;
   }
+  .debate .debate-topic { grid-area: topic; position: static; margin: 0; padding: 4px 0 10px;
+    font-size: 15px; border-bottom: none; }
   .debate .chips { grid-area: chips; gap: 14px; }
   .debate .chip { font-size: 13px; padding: 12px 18px; }
   .debate .timer { grid-area: timer; }

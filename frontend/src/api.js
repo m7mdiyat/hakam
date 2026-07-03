@@ -26,7 +26,9 @@ export const api = {
   createRoom: (topic) =>
     fetch(`${API}/rooms`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ topic }) }).then(handle),
 
-  getRoom: (code) => fetch(`${API}/rooms/${code}`).then(handle),
+  // Token identifies the poller so the server can track presence («غير متصل»).
+  getRoom: (code, token) =>
+    fetch(`${API}/rooms/${code}`, token ? { headers: { 'X-Debater-Token': token } } : undefined).then(handle),
 
   joinRoom: (code, { name, claim, consent }) =>
     fetch(`${API}/rooms/${code}/join`, {

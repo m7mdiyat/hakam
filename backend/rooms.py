@@ -125,7 +125,7 @@ def join_room(code):
         now = S.now_utc()
         room["debaters"]["b"] = {
             "name": name, "claim": claim, "ready": False,
-            "consent": True, "joined_at": now,
+            "consent": True, "joined_at": now, "last_seen_at": now,
         }
         room["secret_tokens"]["b"] = token_b
         room["state"] = S.CLAIMS
@@ -299,7 +299,15 @@ def submit_turn(code):
 
 @api.get("/rooms/<code>")
 def get_room(code):
-    return _view(_load(code))
+    """Poll target. When the poller identifies itself (token header), its
+    presence is bumped — throttled so the 2s poll doesn't write Firestore
+    every request. Presence powers the «غير متصل» indicator."""
+    room = _load(code)
+    side = S.side_of_token(room, _token())
+    if side and S.presence_stale(room, side):
+        room = get_store().update(normalize_code(code),
+                                  lambda r: S.bump_presence(r, side, S.now_utc()))
+    return _view(room)
 
 
 def _maybe_judge(room: dict) -> dict:

@@ -23,6 +23,7 @@ export function mountDebate(root, ctx) {
 
   root.innerHTML = header('المناظرة') + `
     <div class="screen-body debate">
+      <div class="debate-topic" data-topic></div>
       <div class="chips" data-chips></div>
 
       <div class="timer">
@@ -69,7 +70,6 @@ export function mountDebate(root, ctx) {
   const finishHint = $('[data-finish-hint]');
 
   let lastState = null;
-  let chipsBuilt = false;
   let anchor = null;      // speaking clock { deadline, serverNow, perf, total }
   let prep = null;        // prep clock { deadline, serverNow, perf, label }
   let raf = null;
@@ -289,11 +289,17 @@ export function mountDebate(root, ctx) {
   });
 
   // --- render ------------------------------------------------------------
+  // Re-rendered every poll: presence («غير متصل») changes over time.
   function renderChips(state) {
-    const a = state.debaters.a, b = state.debaters.b;
-    root.querySelector('[data-chips]').innerHTML = `
-      <div class="chip chip-a"><b>${esc(a.name || 'الطرف الأول')}</b><span>${esc(a.claim || '')}</span></div>
-      <div class="chip chip-b"><b>${esc(b.name || 'الطرف الثاني')}</b><span>${esc(b.claim || '')}</span></div>`;
+    const chip = (s) => {
+      const d = state.debaters[s];
+      const offline = d.online === false;   // null = unknown -> assume online
+      return `<div class="chip chip-${s}${offline ? ' chip-away' : ''}">
+        <b>${esc(d.name || (s === 'a' ? 'الطرف الأول' : 'الطرف الثاني'))}
+          ${offline ? '<span class="chip-offline">غير متصل</span>' : ''}</b>
+        <span>${esc(d.claim || '')}</span></div>`;
+    };
+    root.querySelector('[data-chips]').innerHTML = chip('a') + chip('b');
   }
 
   function renderDots(state) {
@@ -340,7 +346,8 @@ export function mountDebate(root, ctx) {
 
   function apply(state) {
     lastState = state;
-    if (!chipsBuilt) { renderChips(state); chipsBuilt = true; }
+    root.querySelector('[data-topic]').textContent = state.topic;
+    renderChips(state);
 
     // timer anchors: speaking clock (deadline set) vs prep window (not started)
     const secs = state.format.turn_seconds;

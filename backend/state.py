@@ -66,9 +66,9 @@ def new_room(code: str, topic: str, token_a: str) -> dict:
         "debaters": {
             # A is the creator; consent is implicit by creating a recorded session.
             "a": {"name": None, "claim": None, "ready": False, "consent": True,
-                  "joined_at": now},
+                  "joined_at": now, "last_seen_at": now},
             "b": {"name": None, "claim": None, "ready": False, "consent": False,
-                  "joined_at": None},
+                  "joined_at": None, "last_seen_at": None},
         },
         "turn_order": order,
         "turn_index": 0,
@@ -125,6 +125,17 @@ def _touch(room: dict, now: datetime, activity: bool = False) -> None:
     room["updated_at"] = now
     if activity:
         room["last_activity_at"] = now
+
+
+def presence_stale(room: dict, side: str, now: Optional[datetime] = None) -> bool:
+    """True when this debater's last_seen is old enough to warrant a write."""
+    now = now or now_utc()
+    seen = room["debaters"][side].get("last_seen_at")
+    return seen is None or (now - seen).total_seconds() > config.PRESENCE_BUMP_SECONDS
+
+
+def bump_presence(room: dict, side: str, now: Optional[datetime] = None) -> None:
+    room["debaters"][side]["last_seen_at"] = now or now_utc()
 
 
 def is_expired(room: dict, now: Optional[datetime] = None) -> bool:
@@ -334,6 +345,7 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
 
     def debater(side: str) -> dict:
         d = room["debaters"][side]
+        seen = d.get("last_seen_at")
         return {
             "side": side,
             "name": d["name"],
@@ -341,6 +353,9 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
             "ready": d["ready"],
             "consent": d["consent"],
             "joined": bool(d["name"]),
+            # None = never seen polling (unknown); the UI treats unknown as online.
+            "online": (None if seen is None else
+                       (now - seen).total_seconds() < config.PRESENCE_TTL_SECONDS),
         }
 
     turns = [{

@@ -53,6 +53,11 @@ SUBMIT_GRACE_SECONDS = _int("HAKAM_SUBMIT_GRACE_SECONDS", 3)
 NOSHOW_GRACE_SECONDS = _int("HAKAM_NOSHOW_GRACE_SECONDS", 10)
 # Non-terminal room with no activity for this long -> abandoned.
 ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
+# Presence: clients poll every 2s with their token; a debater unseen for
+# PRESENCE_TTL is shown as offline («غير متصل»). Bumps are throttled so the
+# poll doesn't write Firestore on every request.
+PRESENCE_TTL_SECONDS = _int("HAKAM_PRESENCE_TTL_SECONDS", 15)
+PRESENCE_BUMP_SECONDS = _int("HAKAM_PRESENCE_BUMP_SECONDS", 8)
 # Room hard-expires (410) this many hours after creation; also drives Firestore TTL.
 ROOM_TTL_HOURS = _int("HAKAM_ROOM_TTL_HOURS", 24)
 
