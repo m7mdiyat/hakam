@@ -9,7 +9,7 @@ export function mountLanding(root, ctx) {
     <div class="screen-body landing">
       <div class="hero">
         <div class="hero-mark">${logo(56, 'var(--gold)', 1.2)}</div>
-        <h1 class="wordmark">حَكَم</h1>
+        <h1 class="wordmark">الحَكَم</h1>
         <div class="tagline">لتكن الحُجّة هي الفيصل</div>
       </div>
 

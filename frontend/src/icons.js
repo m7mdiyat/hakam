@@ -4,7 +4,7 @@ const svg = (size, stroke, sw, inner) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" ` +
   `stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 
-// Balance scale — the حَكَم mark.
+// Balance scale — the الحَكَم mark.
 export const logo = (size = 18, stroke = 'var(--gold)', sw = 1.5) => svg(size, stroke, sw,
   '<path d="M12 4v15"/><path d="M5 6h14"/><path d="M5 6l-2.5 5"/><path d="M5 6l2.5 5"/>' +
   '<path d="M2.5 11a2.5 2.5 0 0 0 5 0"/><path d="M19 6l-2.5 5"/><path d="M19 6l2.5 5"/>' +

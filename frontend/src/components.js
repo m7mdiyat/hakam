@@ -5,7 +5,7 @@ import { esc, initial } from './ui.js';
 export function header(label, opts = {}) {
   const crumbCls = opts.crumbDesktopOnly ? 'crumb crumb-desktop' : 'crumb';
   return `<header class="hdr">
-    <div class="brand">${logo(18)}<span class="brand-name">حَكَم</span></div>
+    <div class="brand">${logo(18)}<span class="brand-name">الحَكَم</span></div>
     ${label ? `<div class="${crumbCls}">${esc(label)}</div>` : ''}
   </header>`;
 }
