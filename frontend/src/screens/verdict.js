@@ -266,15 +266,26 @@ export function verdictHtml(state) {
     </div>`;
 }
 
+// Deliberation steps, cycled while judging runs (~10-23s in production).
+// 4 steps x 4.5s = one 18s sweep — lands mid-cycle for most verdicts, loops
+// gracefully for slow ones, and the verdict interrupts instantly either way.
+export const DELIB_STEPS = [
+  'الحَكَم يراجع الحجج',
+  'يبحث عن مغالطات منطقية',
+  'يقيّم قوة كل حجة',
+  'يحسب النتيجة النهائية',
+];
+export const DELIB_STEP_MS = 4500;
+
 export function deliberatingHtml(state, failed) {
   return `
     <div class="screen-body screen-center verdict">
-      <div class="verdict-hero">
-        <div class="verdict-mark v-pulse">${logo(30, 'var(--gold)', 1.3)}</div>
-        <div class="verdict-title">الحَكَم يراجع الحجج</div>
-        <div class="verdict-sub">${failed
-          ? 'تعثّرت المراجعة، تجري إعادة المحاولة…'
-          : 'يستمع للجولات، يقارن الحجج، ويتحقق من المغالطات…'}</div>
+      <div class="verdict-hero delib-hero">
+        <div class="delib-scale">${logo(46, 'var(--gold)', 1.2)}</div>
+        <div class="verdict-title delib-msg" data-delib-msg>${failed
+          ? 'تعثّرت المراجعة، تجري إعادة المحاولة…' : DELIB_STEPS[0]}</div>
+        ${failed ? '' : `<div class="delib-dots" data-delib-dots>${
+          DELIB_STEPS.map((_, i) => `<i class="${i === 0 ? 'on' : ''}"></i>`).join('')}</div>`}
         <div class="verdict-topic">${esc(state.topic)}</div>
       </div>
     </div>`;
@@ -299,6 +310,28 @@ export function mountVerdict(root, ctx) {
   let mode = null;              // 'wait' | 'verdict'
   let lastRetrigger = 0;
   let player = null;
+  let delibTimer = null;
+  let delibIdx = 0;
+
+  function stopDelibCycle() {
+    if (delibTimer) { clearInterval(delibTimer); delibTimer = null; }
+  }
+  function startDelibCycle() {
+    stopDelibCycle();
+    delibIdx = 0;
+    delibTimer = setInterval(() => {
+      const msg = root.querySelector('[data-delib-msg]');
+      if (!msg) { stopDelibCycle(); return; }
+      delibIdx = (delibIdx + 1) % DELIB_STEPS.length;
+      msg.classList.add('delib-fade');
+      setTimeout(() => {
+        msg.textContent = DELIB_STEPS[delibIdx];
+        msg.classList.remove('delib-fade');
+        root.querySelectorAll('[data-delib-dots] i').forEach(
+          (d, i) => d.classList.toggle('on', i === delibIdx));
+      }, 250);
+    }, DELIB_STEP_MS);
+  }
 
   function markProofs() {
     const active = player ? player.active() : null;
@@ -364,14 +397,20 @@ export function mountVerdict(root, ctx) {
   return {
     update(state) {
       if (state.verdict) {
-        if (mode !== 'verdict') { mode = 'verdict'; renderVerdict(state); }
+        // The verdict interrupts the deliberation loop immediately.
+        if (mode !== 'verdict') { mode = 'verdict'; stopDelibCycle(); renderVerdict(state); }
         return;
       }
       const failed = state.judging_status === 'failed';
       const key = failed ? 'wait-failed' : 'wait';
-      if (mode !== key) { mode = key; root.innerHTML = header('الحُكْم') + deliberatingHtml(state, failed); }
+      if (mode !== key) {
+        mode = key;
+        root.innerHTML = header('الحُكْم') + deliberatingHtml(state, failed);
+        if (failed) stopDelibCycle();
+        else startDelibCycle();
+      }
       maybeRetrigger(state);
     },
-    unmount() { if (player) player.destroy(); },
+    unmount() { stopDelibCycle(); if (player) player.destroy(); },
   };
 }

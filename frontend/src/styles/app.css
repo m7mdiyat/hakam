@@ -332,6 +332,26 @@ button { font-family: inherit; }
 .v-pulse { animation: v-pulse 1.6s ease-in-out infinite; }
 @keyframes v-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.92); } }
 
+/* Deliberation screen: the scale weighs, the steps cycle. */
+.delib-hero { padding: 34px 22px; gap: 14px; }
+.delib-scale { position: relative; display: flex; justify-content: center; padding: 6px 0; }
+.delib-scale::before {
+  content: ''; position: absolute; inset: -18px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(201, 164, 92, 0.16), transparent 65%);
+  animation: delib-glow 2.8s ease-in-out infinite;
+}
+.delib-scale svg { animation: delib-tilt 2.8s ease-in-out infinite; transform-origin: 50% 20%; }
+@keyframes delib-tilt { 0%, 100% { transform: rotate(5deg); } 50% { transform: rotate(-5deg); } }
+@keyframes delib-glow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.delib-msg { transition: opacity 0.25s; min-height: 1.6em; }
+.delib-msg.delib-fade { opacity: 0; }
+.delib-dots { display: flex; gap: 7px; justify-content: center; }
+.delib-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-14); transition: background 0.3s; }
+.delib-dots i.on { background: var(--gold); }
+@media (prefers-reduced-motion: reduce) {
+  .delib-scale svg, .delib-scale::before { animation: none; }
+}
+
 .v-panel {
   background: var(--surface); border: 1px solid var(--line-10, rgba(255,255,255,0.08));
   border-radius: var(--r-sm); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px;
