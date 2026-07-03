@@ -97,9 +97,11 @@ TRANSCRIBE_ENABLED = GEMINI_ENABLED
 # One judging run may be claimed at a time; a crashed run's lease expires after
 # this many seconds so a client retrigger (POST /judge) can reclaim it.
 JUDGE_LEASE_SECONDS = _int("HAKAM_JUDGE_LEASE_SECONDS", 90)
-# Thinking budgets (tokens): probes reason hard, synthesis narrates.
+# Thinking budgets (tokens): probes reason hard, synthesis narrates,
+# extraction does structural analysis (Verdict v2 Phase A).
 JUDGE_THINKING_BUDGET = _int("HAKAM_JUDGE_THINKING_BUDGET", 2048)
 SYNTH_THINKING_BUDGET = _int("HAKAM_SYNTH_THINKING_BUDGET", 1024)
+EXTRACT_THINKING_BUDGET = _int("HAKAM_EXTRACT_THINKING_BUDGET", 2048)
 
 # --- Transcription queue (Cloud Tasks) ---------------------------------------
 # Turn uploads enqueue transcription instead of blocking the uploader; the queue

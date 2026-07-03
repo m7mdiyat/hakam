@@ -65,6 +65,89 @@ SEVERITIES = ["low", "medium", "high"]
 # Emotional-register fallacies feed the derived emotionality meter.
 EMOTIONAL_FALLACIES = ("appeal_to_emotion", "ad_hominem")
 
+# ---------------------------------------------------------------------------
+# Verdict v2 — argument extraction (Phase A). The quoted/reconstructed premise
+# distinction is TWO ARRAY TYPES: an implicit premise has no field that could
+# hold a segment id, so an audio-anchor leak is structurally impossible.
+# Models never mint argument ids — the server assigns them by array order.
+_QUOTED = {
+    "type": "OBJECT",
+    "properties": {
+        "segment_ids": {"type": "ARRAY", "items": {"type": "STRING"},
+                        "description": "معرفات المقاطع مثل t2-03"},
+        "quote": {"type": "STRING", "description": "اقتباس حرفي دون تغيير"},
+    },
+    "required": ["segment_ids", "quote"],
+    "propertyOrdering": ["segment_ids", "quote"],
+}
+
+_SPOKEN_PREMISE = {
+    "type": "OBJECT",
+    "properties": {
+        "segment_ids": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "quote": {"type": "STRING", "description": "اقتباس حرفي دون تغيير"},
+        "external": {"type": "BOOLEAN",
+                     "description": "هل تستند إلى واقعة من خارج المناظرة؟"},
+        "external_claim_ar": {"type": "STRING",
+                              "description": "صياغة الادعاء الخارجي بجملة إن وُجد"},
+    },
+    "required": ["segment_ids", "quote", "external"],
+    "propertyOrdering": ["segment_ids", "quote", "external", "external_claim_ar"],
+}
+
+_IMPLICIT_PREMISE = {
+    "type": "OBJECT",
+    "properties": {
+        "why_needed_ar": {"type": "STRING", "description": "لماذا يلزم هذه الحجةَ افتراضُها"},
+        "text_ar": {"type": "STRING", "description": "المقدمة غير المنطوقة بصياغتك"},
+    },
+    "required": ["why_needed_ar", "text_ar"],
+    "propertyOrdering": ["why_needed_ar", "text_ar"],
+}
+
+_ARGUMENT = {
+    "type": "OBJECT",
+    "properties": {
+        "rebuts_segments": {"type": "ARRAY", "items": {"type": "STRING"},
+                            "description": "مقاطع نقطة الخصم التي ترد عليها؛ فارغة إن لم تكن ردًا"},
+        "conclusion": _QUOTED,
+        "premises": {"type": "ARRAY", "items": _SPOKEN_PREMISE},
+        "implicit_premises": {"type": "ARRAY", "items": _IMPLICIT_PREMISE},
+        "classification": {
+            "type": "OBJECT",
+            "properties": {
+                "rationale_ar": {"type": "STRING"},
+                "type": {"type": "STRING", "enum": ["deductive", "inductive"]},
+                "tentative": {"type": "BOOLEAN"},
+            },
+            "required": ["rationale_ar", "type", "tentative"],
+            "propertyOrdering": ["rationale_ar", "type", "tentative"],
+        },
+        "weight": {"type": "STRING", "enum": ["primary", "secondary"]},
+    },
+    "required": ["rebuts_segments", "conclusion", "premises",
+                 "implicit_premises", "classification", "weight"],
+    "propertyOrdering": ["rebuts_segments", "conclusion", "premises",
+                         "implicit_premises", "classification", "weight"],
+}
+
+EXTRACTION_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "arguments": {"type": "ARRAY", "items": _ARGUMENT,
+                      "description": "بحد أقصى 4، الرئيسية أولًا"},
+        "unsupported_assertions": {"type": "ARRAY", "items": _QUOTED,
+                                   "description": "آراء أُعلنت بلا مقدمات تدعمها"},
+        "orphan_premises": {"type": "ARRAY", "items": _QUOTED,
+                            "description": "شواهد ومقدمات لم تصل إلى نتيجة"},
+    },
+    "required": ["arguments", "unsupported_assertions", "orphan_premises"],
+    "propertyOrdering": ["arguments", "unsupported_assertions", "orphan_premises"],
+}
+
+ARG_CAP = 4
+
+
 _AXIS = {
     "type": "OBJECT",
     "properties": {
