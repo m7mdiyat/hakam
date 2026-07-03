@@ -17,6 +17,20 @@ const AXIS_AR = {
 };
 const SEV_AR = { low: 'منخفضة', medium: 'متوسطة', high: 'عالية' };
 const BAND_AR = { decisive: 'فوز حاسم', clear: 'فوز واضح', narrow: 'فوز بفارق ضئيل' };
+// Verdict v2 — everyday-Arabic renderings of the logic vocabulary.
+const CLS_AR = { deductive: 'استدلال قطعي', inductive: 'استدلال ترجيحي' };
+const CLS_HINT = { deductive: 'إن صحّت مقدماته لزمت نتيجته',
+                   inductive: 'مقدماته ترجّح نتيجته' };
+const AV_AR = { valid: 'سليم البناء', invalid: 'مختل البناء',
+                strong: 'حجة قوية', weak: 'حجة ضعيفة', contested: 'تقييم متقارب' };
+const AV_KIND = { valid: 'good', strong: 'good', invalid: 'bad', weak: 'bad',
+                  contested: 'mid' };
+const EFFECT_AR = { defeated: 'أسقطتها', weakened: 'أضعفتها', unaffected: 'لم تؤثر فيها' };
+const SND_AR = { self_contradiction: 'تناقض ذاتي',
+                 unsupported_load_bearing: 'ادعاء مفصلي بلا سند',
+                 premise_conclusion_drift: 'انزياح عن المقدمات',
+                 claim_abandonment: 'التخلي عن الدعوى' };
+const isV2 = (v) => (v.schema_version || 1) >= 2;
 
 const sideColor = (s) => (s === 'a' ? 'var(--teal)' : 'var(--coral)');
 const roundOf = (tk) => parseInt(tk.slice(-1), 10);
@@ -33,9 +47,10 @@ const meanScore = (scores) => {
 // --- pure builders (also used by the static preview harness) ----------------
 
 function heroHtml(state, v) {
+  const val = (s) => (isV2(v) ? Math.round(v.score[s]) : meanScore(v.scores[s]));
   const chips = ['a', 'b'].map((s) => `
     <span class="v-chip" style="--c:${sideColor(s)}">
-      ${esc(nameOf(state, s))} <b>${meanScore(v.scores[s])}</b></span>`).join('');
+      ${esc(nameOf(state, s))} <b>${val(s)}</b></span>`).join('');
   let core;
   if (v.winner == null) {
     core = `
@@ -63,7 +78,7 @@ function heroHtml(state, v) {
 // Pentagon radar — same geometry as design/hakam-design.html:
 // center (140,140), vertex k at angle k·72° from top: x=140+R·sin, y=140−R·cos.
 // Data radius == axis score. Inapplicable axes are skipped (shorter polygon).
-function radarHtml(v) {
+function radarInnerSvg(v) {
   const pt = (k, r) => {
     const th = (k * 72 * Math.PI) / 180;
     return `${(140 + r * Math.sin(th)).toFixed(1)},${(140 - r * Math.cos(th)).toFixed(1)}`;
@@ -88,18 +103,21 @@ function radarHtml(v) {
     return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle"
       font-size="11" fill="${na ? 'var(--muted-2)' : 'var(--muted)'}">${AXIS_AR[ax]}</text>`;
   }).join('');
+  return `${ring(100)}${ring(66)}${ring(33)}${spokes}
+    ${poly('a', '#3FB8AF')}${poly('b', '#F2735F')}${labels}`;
+}
+
+function radarHtml(v) {
   return `
     <div class="v-panel">
       <div class="panel-head"><span>مقارنة الأداء</span></div>
       <svg class="radar" viewBox="-52 -16 384 312" role="img" aria-label="مقارنة الأداء">
-        ${ring(100)}${ring(66)}${ring(33)}${spokes}
-        ${poly('a', '#3FB8AF')}${poly('b', '#F2735F')}
-        ${labels}
+        ${radarInnerSvg(v)}
       </svg>
     </div>`;
 }
 
-function axesHtml(state, v) {
+function axesInnerHtml(state, v) {
   const rows = AXES.map((ax) => {
     const a = v.scores.a[ax], b = v.scores.b[ax];
     const bars = (a == null && b == null)
@@ -116,14 +134,17 @@ function axesHtml(state, v) {
   }).join('');
   const legend = ['a', 'b'].map((s) =>
     `<span class="v-legend"><i style="background:${sideColor(s)}"></i>${esc(nameOf(state, s))}</span>`).join('');
+  return `<div class="strip-sub"><span>معايير التقييم</span><span class="v-legends">${legend}</span></div>${rows}`;
+}
+
+function axesHtml(state, v) {
   return `
     <div class="v-panel">
-      <div class="panel-head"><span>معايير التقييم</span><span class="v-legends">${legend}</span></div>
-      ${rows}
+      ${axesInnerHtml(state, v)}
     </div>`;
 }
 
-function emotionalityHtml(state, v) {
+function emotionalityInnerHtml(state, v) {
   const rows = ['a', 'b'].map((s) => {
     const val = v.emotionality[s];
     const word = val < 35 ? 'هادئ' : val <= 65 ? 'متوازن' : 'منفعل';
@@ -133,10 +154,139 @@ function emotionalityHtml(state, v) {
       <span class="meter-val">${val} · ${word}</span>
     </div>`;
   }).join('');
+  return `<div class="strip-sub"><span>المؤشر العاطفي</span></div>${rows}`;
+}
+
+function emotionalityHtml(state, v) {
   return `
     <div class="v-panel">
-      <div class="panel-head"><span>المؤشر العاطفي</span></div>
-      ${rows}</div>`;
+      ${emotionalityInnerHtml(state, v)}
+    </div>`;
+}
+
+// ---- Verdict v2: Section 1 (تحليل الحجج) + Section 2 (صحة القول) -----------
+
+const playChip = (key, audio) => (audio ? `
+  <button class="proof-btn proof-sm" type="button" data-proof="${key}"
+    data-turn="${audio.turn}" data-start="${audio.start_s}" data-end="${audio.end_s}">
+    <span class="proof-icon">${playIcon(11, 'currentColor')}</span></button>` : '');
+
+function argCardHtml(state, side, arg, rebuttedBy) {
+  const cls = arg.classification;
+  const chips = `
+    <span class="arg-tag">${arg.weight === 'primary' ? 'الحجة الرئيسية' : 'حجة فرعية'}</span>
+    <span class="arg-tag arg-cls" title="${CLS_HINT[cls.type]}">${CLS_AR[cls.type]}${cls.tentative ? ' · تصنيف تقريبي' : ''}</span>
+    <span class="arg-verdict av-${AV_KIND[arg.verdict]}">${AV_AR[arg.verdict]}</span>`;
+  const premises = arg.premises.map((p, i) => `
+    <div class="arg-line">
+      <span class="arg-line-label">مقدمة</span>
+      <span class="arg-quote">«${esc(p.quote)}»</span>
+      ${p.external ? '<span class="arg-ext">واقعة خارجية</span>' : ''}
+      ${playChip(`pr-${arg.id}-${i}`, p.audio)}
+    </div>`).join('');
+  const implicit = arg.implicit_premises.map((ip) => `
+    <div class="arg-line arg-implicit">
+      <span class="arg-line-label">مقدمة غير منطوقة</span>
+      <span>${esc(ip.text_ar)}</span>
+      <span class="arg-ext arg-ext-ghost">استنتجها الحَكَم</span>
+    </div>`).join('');
+  const links = [];
+  if (arg.rebuts) {
+    links.push(`ترد على حجة ${esc(nameOf(state, side === 'a' ? 'b' : 'a'))} — ${EFFECT_AR[arg.rebuts.effect] || ''}`);
+  }
+  if (rebuttedBy) {
+    links.push(`ردّ عليها ${esc(nameOf(state, rebuttedBy.side))} — ${EFFECT_AR[rebuttedBy.effect] || ''}`);
+  }
+  return `
+    <div class="arg-card" id="arg-${arg.id}" style="--c:${sideColor(side)}">
+      <div class="arg-chips">${chips}${arg.unanswered ? '<span class="arg-badge">بقيت بلا ردّ</span>' : ''}</div>
+      <div class="arg-line arg-concl">
+        <span class="arg-line-label">النتيجة</span>
+        <span class="arg-quote">«${esc(arg.conclusion.quote)}»</span>
+        ${playChip(`co-${arg.id}`, arg.conclusion.audio)}
+      </div>
+      ${premises}${implicit}
+      ${arg.failure_point_ar ? `<div class="arg-fail">موضع الخلل: ${esc(arg.failure_point_ar)}</div>` : ''}
+      ${links.length ? `<div class="arg-links">${links.join(' · ')}</div>` : ''}
+    </div>`;
+}
+
+function analysisHtml(state, v) {
+  // Cross-links: who rebutted whom (drawn from the opponent's rebuts fields).
+  const rebuttedBy = {};
+  ['a', 'b'].forEach((s) => v.analysis[s].arguments.forEach((arg) => {
+    if (arg.rebuts) rebuttedBy[arg.rebuts.target_id] = { side: s, effect: arg.rebuts.effect };
+  }));
+  const blocks = ['a', 'b'].map((s) => {
+    const m = v.analysis[s];
+    const assertions = m.unsupported_assertions.length ? `
+      <div class="arg-empty" style="--c:${sideColor(s)}">
+        <div class="arg-empty-title">قدّم رأيًا بلا مقدمات تدعمه</div>
+        ${m.unsupported_assertions.map((u, i) => `
+          <div class="arg-line"><span class="arg-quote">«${esc(u.quote)}»</span>
+          ${playChip(`ua-${s}-${i}`, u.audio)}</div>`).join('')}
+      </div>` : '';
+    const cards = m.arguments.map((arg) => argCardHtml(state, s, arg, rebuttedBy[arg.id])).join('');
+    return `
+      <div class="arg-block">
+        <div class="arg-owner" style="color:${sideColor(s)}">${esc(nameOf(state, s))}</div>
+        ${assertions}${cards || '<div class="v-empty">لم تُستخرج حجج بنيوية</div>'}
+      </div>`;
+  }).join('');
+  return `
+    <div class="v-panel">
+      <div class="panel-head"><span>تحليل الحجج</span></div>
+      ${blocks}
+    </div>`;
+}
+
+function soundnessHtml(state, v) {
+  if (!v.soundness.length) return '';
+  const cards = v.soundness.map((s, i) => `
+    <div class="fal-card" style="--c:${sideColor(s.speaker)}">
+      <div class="fal-head"><span class="fal-name">${esc(s.name_ar || SND_AR[s.type] || '')}</span></div>
+      <div class="fal-meta">${esc(nameOf(state, s.speaker))}</div>
+      ${s.quotes.map((q, j) => `
+        <blockquote class="fal-quote">«${esc(q.quote)}»
+          ${playChip(`sn-${i}-${j}`, q.audio)}</blockquote>`).join('')}
+      <div class="fal-why">${esc(s.explanation_ar)}</div>
+    </div>`).join('');
+  return `
+    <div class="v-panel">
+      <div class="panel-head"><span>تماسك الموقف</span></div>
+      <div class="fal-list">${cards}</div></div>`;
+}
+
+function externalHtml(state, v) {
+  if (!v.external_claims.length) return '';
+  const rows = v.external_claims.map((e, i) => `
+    <div class="ext-row">
+      <span class="turn-name turn-${e.speaker}">${esc(nameOf(state, e.speaker))}</span>
+      <span class="ext-claim">${esc(e.claim_ar)}</span>
+    </div>`).join('');
+  return `
+    <div class="v-panel">
+      <div class="panel-head"><span>وقائع استند إليها القول</span></div>
+      ${rows}
+      <div class="ext-note">لا يفصل الحَكَم في صحة هذه الوقائع أو خطئها.</div>
+    </div>`;
+}
+
+// Demoted general assessment: axes + emotionality + radar, collapsed.
+function assessmentStripHtml(state, v) {
+  return `
+    <div class="v-panel">
+      <button class="v-collapse-head" type="button" data-collapse>
+        <span>التقييم العام</span><span class="chev">▾</span>
+      </button>
+      <div class="v-collapse-body" hidden>
+        ${axesInnerHtml(state, v)}
+        ${emotionalityInnerHtml(state, v)}
+        <svg class="radar" viewBox="-52 -16 384 312" role="img" aria-label="مقارنة الأداء">
+          ${radarInnerSvg(v)}
+        </svg>
+      </div>
+    </div>`;
 }
 
 const proofBtn = (key, audio) => (audio ? `
@@ -153,7 +303,8 @@ function fallaciesHtml(state, v) {
         <span class="fal-en">${esc(f.name_en)}</span>
         <span class="fal-sev fal-sev-${f.severity}">${SEV_AR[f.severity] || ''}</span>
       </div>
-      <div class="fal-meta">${esc(nameOf(state, f.speaker))} · ${turnLabel(f.turn)}</div>
+      <div class="fal-meta">${esc(nameOf(state, f.speaker))} · ${turnLabel(f.turn)}${
+        f.argument_id ? ` · <button class="linklike fal-link" type="button" data-goto="arg-${f.argument_id}">ضمن حجته — اعرضها</button>` : ''}</div>
       <blockquote class="fal-quote">«${esc(f.quote)}»</blockquote>
       <div class="fal-why">${esc(f.explanation_ar)}</div>
       ${proofBtn(`fal-${i}`, f.audio)}
@@ -247,14 +398,23 @@ function transcriptPanelHtml(state) {
 
 export function verdictHtml(state) {
   const v = state.verdict;
-  return `
-    <div class="screen-body verdict">
-      ${heroHtml(state, v)}
+  // v2: the argument analysis is the main event; axes/radar demote to a
+  // collapsed strip. v1 docs (≤24h old) render the classic layout.
+  const middle = isV2(v) ? `
+      ${analysisHtml(state, v)}
+      ${fallaciesHtml(state, v)}
+      ${soundnessHtml(state, v)}
+      ${externalHtml(state, v)}
+      ${assessmentStripHtml(state, v)}` : `
       ${radarHtml(v)}
       ${axesHtml(state, v)}
       ${emotionalityHtml(state, v)}
       ${fallaciesHtml(state, v)}
-      ${droppedHtml(state, v)}
+      ${droppedHtml(state, v)}`;
+  return `
+    <div class="screen-body verdict">
+      ${heroHtml(state, v)}
+      ${middle}
       ${momentHtml(v)}
       ${tipsHtml(state, v)}
       ${transcriptPanelHtml(state)}
@@ -296,7 +456,8 @@ function shareText(state, v) {
   lines.push(v.winner == null
     ? 'النتيجة: متقاربة — لا فائز محسوم'
     : `الفائز: ${nameOf(state, v.winner)} (${BAND_AR[v.margin.band] || ''})`);
-  ['a', 'b'].forEach((s) => lines.push(`${nameOf(state, s)}: ${meanScore(v.scores[s])}/100`));
+  ['a', 'b'].forEach((s) => lines.push(
+    `${nameOf(state, s)}: ${isV2(v) ? Math.round(v.score[s]) : meanScore(v.scores[s])}/100`));
   if (v.reasoning_ar) lines.push(v.reasoning_ar);
   lines.push('thehakam.com');
   return lines.join('\n');
@@ -347,6 +508,16 @@ export function mountVerdict(root, ctx) {
     player = createProofPlayer(code, token, markProofs);
 
     root.addEventListener('click', (e) => {
+      const g = e.target.closest('[data-goto]');
+      if (g) {
+        const el = root.querySelector(`#${g.getAttribute('data-goto')}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('arg-flash');
+          setTimeout(() => el.classList.remove('arg-flash'), 1600);
+        }
+        return;
+      }
       const c = e.target.closest('[data-collapse]');
       if (c) {
         const body = c.parentElement.querySelector('.v-collapse-body');
