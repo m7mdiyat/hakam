@@ -153,16 +153,24 @@ def advance_turn(room: dict, now: Optional[datetime] = None) -> None:
 
 
 def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
-                content_type: str, now: Optional[datetime] = None) -> None:
-    """Append a real (recorded) turn for `side` and advance. Caller has validated turn."""
+                content_type: str, m4a_uri: Optional[str] = None,
+                duration_s: Optional[float] = None,
+                now: Optional[datetime] = None) -> None:
+    """Append a real (recorded) turn for `side` and advance. Caller has validated turn.
+
+    `m4a_uri`/`duration_s` come from the upload-time ffmpeg transcode: the canonical
+    mono-AAC rendition (what clients play and Gemini reads) and its authoritative
+    duration. None only when ffmpeg is unavailable (bare local dev)."""
     now = now or now_utc()
     turn_key = current_turn(room)
     room["turns"].append({
         "turn": turn_key,
         "debater": side,
         "audio_uri": audio_uri,
+        "audio_m4a_uri": m4a_uri,
         "content_type": content_type,
         "duration_ms": int(duration_ms),
+        "duration_s": duration_s,
         "forfeited": False,
         "transcript": None,  # Phase 2
         "created_at": now,
@@ -178,7 +186,9 @@ def _forfeit_current_turn(room: dict, now: datetime) -> None:
         "turn": turn_key,
         "debater": side_of_turn(turn_key),
         "audio_uri": None,
+        "audio_m4a_uri": None,
         "duration_ms": 0,
+        "duration_s": None,
         "forfeited": True,
         "transcript": None,
         "created_at": now,
@@ -262,6 +272,7 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "turn": t["turn"],
         "debater": t["debater"],
         "duration_ms": t.get("duration_ms", 0),
+        "duration_s": t.get("duration_s"),
         "forfeited": t.get("forfeited", False),
         "has_audio": bool(t.get("audio_uri")),
         "transcript": t.get("transcript"),  # null in Phase 1

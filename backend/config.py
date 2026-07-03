@@ -54,6 +54,10 @@ ROOM_TTL_HOURS = _int("HAKAM_ROOM_TTL_HOURS", 24)
 # Independent server-side byte cap (UI soft-stop is not trusted). ~2 min Opus is
 # well under a few MB; we allow generous headroom but keep it bounded.
 MAX_AUDIO_BYTES = _int("HAKAM_MAX_AUDIO_BYTES", 12 * 1024 * 1024)
+# Real-duration cap, measured by ffprobe at upload: reject audio longer than
+# TURN_SECONDS + this grace. Keeping turns short is also what keeps Phase-2
+# transcript timestamps accurate (drift grows with clip length).
+AUDIO_DURATION_GRACE_SECONDS = _int("HAKAM_AUDIO_DURATION_GRACE_SECONDS", 10)
 ALLOWED_AUDIO_MIMES = ("audio/webm", "audio/mp4", "audio/ogg", "audio/mpeg", "audio/aac")
 
 # --- Rate limiting ----------------------------------------------------------

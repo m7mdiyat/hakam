@@ -27,14 +27,23 @@ def ext_for(content_type: str) -> str:
     return _EXT.get(base, "bin")
 
 
+def _basename(turn_key: str, content_type: str, variant: str = "") -> str:
+    """`variant` keeps derived renditions from colliding with the original —
+    an iOS original (audio/mp4) and its canonical m4a would otherwise share
+    `turn_a1.m4a`. E.g. variant="norm" -> turn_a1.norm.m4a."""
+    mid = f".{variant}" if variant else ""
+    return f"{turn_key}{mid}.{ext_for(content_type)}"
+
+
 class GcsStorage:
     def __init__(self):
         from google.cloud import storage
         self._client = storage.Client(project=config.PROJECT_ID)
         self._bucket = self._client.bucket(config.AUDIO_BUCKET)
 
-    def save(self, code: str, turn_key: str, data: bytes, content_type: str) -> str:
-        blob_name = f"rooms/{code}/{turn_key}.{ext_for(content_type)}"
+    def save(self, code: str, turn_key: str, data: bytes, content_type: str,
+             variant: str = "") -> str:
+        blob_name = f"rooms/{code}/{_basename(turn_key, content_type, variant)}"
         blob = self._bucket.blob(blob_name)
         blob.upload_from_string(data, content_type=content_type)
         return f"gs://{config.AUDIO_BUCKET}/{blob_name}"
@@ -51,8 +60,9 @@ class LocalStorage:
         self.root = Path(config.LOCAL_AUDIO_DIR)
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def save(self, code: str, turn_key: str, data: bytes, content_type: str) -> str:
-        rel = f"rooms/{code}/{turn_key}.{ext_for(content_type)}"
+    def save(self, code: str, turn_key: str, data: bytes, content_type: str,
+             variant: str = "") -> str:
+        rel = f"rooms/{code}/{_basename(turn_key, content_type, variant)}"
         path = self.root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:

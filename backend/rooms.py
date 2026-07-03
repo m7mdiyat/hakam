@@ -207,8 +207,29 @@ def submit_turn(code):
         duration_ms = 0
     duration_ms = max(0, min(duration_ms, (config.TURN_SECONDS + 5) * 1000))
 
+    # Canonical rendition: transcode to mono m4a and measure the real duration
+    # (see audio.py for why). In production ffmpeg always exists; an unreadable
+    # upload is the client's problem, not a 500.
+    from .audio import TranscodeError, ffmpeg_available, transcode_to_m4a
+    m4a_data, duration_s = None, None
+    if ffmpeg_available():
+        try:
+            m4a_data, duration_s = transcode_to_m4a(data, content_type)
+        except TranscodeError:
+            raise ApiError(400, "bad_audio", "تعذّرت قراءة التسجيل الصوتي.")
+        # The byte cap can't bound time (opus bitrate varies); the probed
+        # duration can. UI stops at TURN_SECONDS; small grace for stop lag.
+        if duration_s > config.TURN_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS:
+            raise ApiError(400, "audio_too_long", "التسجيل أطول من مدة الجولة.")
+        duration_ms = int(duration_s * 1000)
+
     from .storage import get_storage
     audio_uri = get_storage().save(normalize_code(code), turn_key, data, content_type)
+    m4a_uri = None
+    if m4a_data is not None:
+        m4a_uri = get_storage().save(
+            normalize_code(code), turn_key, m4a_data, "audio/mp4", variant="norm"
+        )
 
     def mut(r: dict):
         # Authoritative re-validation inside the atomic update.
@@ -219,7 +240,8 @@ def submit_turn(code):
             seconds=config.SUBMIT_GRACE_SECONDS
         ):
             raise ApiError(409, "turn_expired", "انتهى وقت الجولة.")
-        S.record_turn(r, side, audio_uri, duration_ms, content_type, S.now_utc())
+        S.record_turn(r, side, audio_uri, duration_ms, content_type,
+                      m4a_uri=m4a_uri, duration_s=duration_s, now=S.now_utc())
 
     return _view(get_store().update(normalize_code(code), mut))
 
@@ -250,9 +272,15 @@ def turn_audio(code, turn):
     entry = next((t for t in room["turns"] if t["turn"] == turn and t.get("audio_uri")), None)
     if entry is None:
         raise ApiError(404, "no_audio", "لا يوجد تسجيل لهذه الجولة.")
+    # Prefer the canonical m4a: plays + seeks on both platforms regardless of
+    # which device recorded it (webm from Android won't play on iOS Safari).
+    if entry.get("audio_m4a_uri"):
+        uri, mimetype = entry["audio_m4a_uri"], "audio/mp4"
+    else:
+        uri, mimetype = entry["audio_uri"], entry.get("content_type", "application/octet-stream")
     from .storage import get_storage
-    data = get_storage().read(entry["audio_uri"])
-    resp = Response(data, mimetype=entry.get("content_type", "application/octet-stream"))
+    data = get_storage().read(uri)
+    resp = Response(data, mimetype=mimetype)
     resp.headers["Cache-Control"] = "private, max-age=600"
     resp.headers["Accept-Ranges"] = "none"
     return resp
