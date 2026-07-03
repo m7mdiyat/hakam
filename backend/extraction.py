@@ -194,9 +194,11 @@ def resolve_rebuts(maps: dict, room: dict) -> dict:
                 if overlap == 0:
                     continue
                 concl_overlap = len(cited & set(t["conclusion"]["segment_ids"]))
-                # temporal rule: the rebuttal must come after the target
-                t_last = max(_seg_order(i) for i in t_ids)
-                if own_first <= t_last:
+                # Temporal rule: the rebuttal must come after the target was
+                # RAISED — an argument exists from its CONCLUSION's turn; a
+                # premise reinforced in a later turn doesn't move that point.
+                t_raised = max(_seg_order(i) for i in t["conclusion"]["segment_ids"])
+                if own_first <= t_raised:
                     continue
                 key = (overlap, concl_overlap, -int(t["id"].split("-")[1]))
                 if key > best_key:
@@ -211,8 +213,9 @@ def resolve_rebuts(maps: dict, room: dict) -> dict:
         rebutted = {a["rebuts"]["target_id"] for a in maps[other]["arguments"] if a.get("rebuts")}
         opp_turns = spaces[other]["turn_idx"]
         for arg in maps[side]["arguments"]:
-            raised_turn = max(_seg_order(i)[0] for i in _arg_seg_ids(arg))
+            raised_turn = max(_seg_order(i)[0] for i in arg["conclusion"]["segment_ids"])
             answerable = any(t > raised_turn for t in opp_turns)
+            arg["answerable"] = bool(answerable)   # scoring's engagement duty needs this
             arg["unanswered"] = bool(answerable and arg["id"] not in rebutted)
     return maps
 

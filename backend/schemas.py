@@ -65,6 +65,16 @@ SEVERITIES = ["low", "medium", "high"]
 # Emotional-register fallacies feed the derived emotionality meter.
 EMOTIONAL_FALLACIES = ("appeal_to_emotion", "ad_hominem")
 
+# Verdict v2 — internal-soundness taxonomy (closed; closed is what makes
+# cross-probe consensus clustering well-defined, exactly like fallacies).
+SOUNDNESS_NAMES = {
+    "self_contradiction": "تناقض ذاتي",
+    "unsupported_load_bearing": "ادعاء مفصلي بلا سند",
+    "premise_conclusion_drift": "انزياح عن المقدمات",
+    "claim_abandonment": "التخلي عن الدعوى",
+}
+SOUNDNESS_TYPES = list(SOUNDNESS_NAMES)
+
 # ---------------------------------------------------------------------------
 # Verdict v2 — argument extraction (Phase A). The quoted/reconstructed premise
 # distinction is TWO ARRAY TYPES: an implicit premise has no field that could
@@ -206,27 +216,91 @@ def _dropped_item(turn_ids: list) -> dict:
     }
 
 
-def probe_schema(turn_ids: list, label_order: str = "ab") -> dict:
-    """The judge-probe schema. `label_order` flips which label's axes are
-    generated first, mirroring the claims order in that probe's prompt."""
-    order = ["a", "b"] if label_order == "ab" else ["b", "a"]
+def _arg_eval(arg_ids: list) -> dict:
     return {
         "type": "OBJECT",
         "properties": {
+            "argument_id": {"type": "STRING", "enum": list(arg_ids)},
+            "analysis_ar": {"type": "STRING", "description": "حلّل قبل أن تحكم"},
+            "verdict": {"type": "STRING", "enum": ["valid", "invalid", "strong", "weak"],
+                        "description": "valid/invalid للاستنباطي، strong/weak للاستقرائي"},
+            "failure_point_ar": {"type": "STRING",
+                                 "description": "موضع الخلل بدقة إن كان الحكم سلبيًا، وإلا فارغ"},
+            "classification_agree": {"type": "BOOLEAN"},
+            "alt_classification": {"type": "STRING", "enum": ["deductive", "inductive"],
+                                   "description": "التصنيف البديل إن خالفت؛ كرر الحالي إن وافقت"},
+            "rebuttal_effect": {"type": "STRING",
+                                "enum": ["defeated", "weakened", "unaffected", "not_applicable"],
+                                "description": "أثر هذه الحجة في هدفها إن كانت ردًا"},
+        },
+        "required": ["argument_id", "analysis_ar", "verdict", "failure_point_ar",
+                     "classification_agree", "alt_classification", "rebuttal_effect"],
+        "propertyOrdering": ["argument_id", "analysis_ar", "verdict", "failure_point_ar",
+                             "classification_agree", "alt_classification", "rebuttal_effect"],
+    }
+
+
+def _soundness_item(arg_ids: list) -> dict:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "speaker": {"type": "STRING", "enum": ["a", "b"]},
+            "argument_id": {"type": "STRING", "enum": list(arg_ids) + ["none"],
+                            "description": "الحجة المرتبطة أو none"},
+            "quotes": {"type": "ARRAY", "items": _QUOTED,
+                       "description": "اقتباس واحد؛ اقتباسان للتناقض الذاتي"},
+            "explanation_ar": {"type": "STRING"},
+            "type": {"type": "STRING", "enum": list(SOUNDNESS_TYPES)},
+        },
+        "required": ["speaker", "argument_id", "quotes", "explanation_ar", "type"],
+        "propertyOrdering": ["speaker", "argument_id", "quotes", "explanation_ar", "type"],
+    }
+
+
+_EXTRACTION_ISSUE = {
+    "type": "OBJECT",
+    "properties": {
+        "kind": {"type": "STRING", "enum": ["missed_argument", "misread_argument"]},
+        "segment_ids": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "note_ar": {"type": "STRING"},
+    },
+    "required": ["kind", "segment_ids", "note_ar"],
+    "propertyOrdering": ["kind", "segment_ids", "note_ar"],
+}
+
+
+def probe_schema(turn_ids: list, arg_ids: list, label_order: str = "ab") -> dict:
+    """Judge-probe schema v2: evaluates the shared argument map. `label_order`
+    flips which label's axes come first, mirroring that probe's claims order.
+    dropped_points is GONE — «بقيت بلا رد» is derived from the rebuttal map."""
+    order = ["a", "b"] if label_order == "ab" else ["b", "a"]
+    fallacy = _fallacy_item(turn_ids)
+    fallacy["properties"]["argument_id"] = {
+        "type": "STRING", "enum": list(arg_ids) + ["none"],
+        "description": "الحجة التي تطعن فيها المغالطة أو none"}
+    fallacy["required"] = fallacy["required"] + ["argument_id"]
+    fallacy["propertyOrdering"] = fallacy["propertyOrdering"][:-1] + \
+        ["argument_id", fallacy["propertyOrdering"][-1]]
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "argument_evals": {"type": "ARRAY", "items": _arg_eval(arg_ids)},
+            "soundness": {"type": "ARRAY", "items": _soundness_item(arg_ids)},
+            "fallacies": {"type": "ARRAY", "items": fallacy},
+            "extraction_issues": {"type": "ARRAY", "items": _EXTRACTION_ISSUE},
             "axes": {
                 "type": "OBJECT",
                 "properties": {"a": _AXES_OBJ, "b": _AXES_OBJ},
                 "required": ["a", "b"],
                 "propertyOrdering": order,
             },
-            "fallacies": {"type": "ARRAY", "items": _fallacy_item(turn_ids)},
-            "dropped_points": {"type": "ARRAY", "items": _dropped_item(turn_ids)},
             "winner": {"type": "STRING", "enum": ["a", "b"]},
             "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
         },
-        "required": ["axes", "fallacies", "dropped_points", "winner", "confidence"],
-        "propertyOrdering": ["axes", "fallacies", "dropped_points",
-                             "winner", "confidence"],
+        "required": ["argument_evals", "soundness", "fallacies", "extraction_issues",
+                     "axes", "winner", "confidence"],
+        "propertyOrdering": ["argument_evals", "soundness", "fallacies",
+                             "extraction_issues", "axes", "winner", "confidence"],
     }
 
 

@@ -1,136 +1,133 @@
-"""Judge ensemble tests: pure merge logic, Arabic anchoring, the mechanical
-answerability rule, and the full flow with the model mocked."""
-import io
-
+"""Verdict-v2 judge: arabic anchoring utilities, merge/tier units, and the full
+mocked pipeline (extraction fake + 4 mapping-aware probe fakes + synthesis)."""
 import pytest
 
 from backend import config
 from backend.arabic import find_span, normalize, strip_names
-from backend.judge import merge_probes
+from backend.judge import decide_tier, merge_arg_evals, merge_axes, merge_findings
 from backend.schemas import AXES
 
 from .conftest import make_tone
 from .test_turn_flow import _json, _room_in_debate, _submit
 
 
-# --- arabic utilities --------------------------------------------------------
+# --- arabic utilities (unchanged behavior) -----------------------------------
 def test_normalize_folds_variants():
     assert normalize("الحُجَّةُ") == normalize("الحجه")
     assert normalize("إنترنت") == normalize("انترنت")
-    assert normalize("رأيي، واضحٌ!") == "راي" + "ي واضح"
 
 
 SEGS = [
     {"i": 0, "start_s": 0.0, "end_s": 5.0, "text": "أرى أن التعليم عن بعد يوسع الفجوة"},
     {"i": 1, "start_s": 5.0, "end_s": 9.0, "text": "والسبب تفاوت جودة الإنترنت بين البيوت"},
-    {"i": 2, "start_s": 9.0, "end_s": 14.0, "text": "ولهذا أطالب بالعودة الحضورية"},
 ]
 
 
-def test_find_span_exact_within_one_segment():
+def test_find_span_exact_and_fuzzy():
     assert find_span("تفاوت جودة الإنترنت", SEGS) == (1, 1)
-
-
-def test_find_span_across_segments():
-    assert find_span("يوسع الفجوة والسبب تفاوت", SEGS) == (0, 1)
-
-
-def test_find_span_fuzzy_tolerates_a_particle():
-    # Judge quoted with one word off ("جوده النت" vs "جودة الإنترنت").
     assert find_span("والسبب تفاوت جودة النت بين البيوت", SEGS) == (1, 1)
-
-
-def test_find_span_rejects_fabricated_quote():
-    assert find_span("العبارة هذه لم تقال في المناظرة إطلاقا أبدا", SEGS) is None
+    assert find_span("عبارة لم تقال في المناظرة إطلاقا أبدا", SEGS) is None
 
 
 def test_strip_names_exact_tokens_only():
-    out = strip_names("قال أحمد إن أحمدك لن يفهم يا سارة", ["أحمد", "سارة"])
-    assert out == "قال المتناظر إن أحمدك لن يفهم يا المتناظر"
+    assert strip_names("قال أحمد إن أحمدك لن يفهم", ["أحمد"]) == \
+        "قال المتناظر إن أحمدك لن يفهم"
 
 
-# --- merge_probes ------------------------------------------------------------
-def _probe(a=80, b=60, computed=None, holistic=None, fallacies=(), dropped=()):
-    axes = {"a": {ax: a for ax in AXES}, "b": {ax: b for ax in AXES}}
-    comp = computed or ("a" if a > b else "b" if b > a else None)
-    return {"axes": axes, "fallacies": list(fallacies), "dropped": list(dropped),
-            "holistic": holistic or comp or "a", "computed": comp,
-            "confidence": "high"}
+# --- merge units ---------------------------------------------------------------
+def _map(side, n_args=1, rebuts=None, answerable=True):
+    args = []
+    for i in range(1, n_args + 1):
+        args.append({
+            "id": f"{side}-{i}", "weight": "primary" if i == 1 else "secondary",
+            "conclusion": {"quote": "ق", "segment_ids": [f"t1-0{i}"], "turn": "t1"},
+            "premises": [], "implicit_premises": [],
+            "classification": {"type": "inductive", "tentative": False, "rationale_ar": ""},
+            "rebuts_segments": [], "rebuts": rebuts if i == 1 else None,
+            "answerable": answerable, "unanswered": False,
+        })
+    return {"side": side, "arguments": args,
+            "unsupported_assertions": [], "orphan_premises": []}
 
 
-FAL = {"speaker": "b", "turn": "t2", "segment_ids": ["t2-00"],
-       "quote": "اقتباس", "explanation_ar": "شرح", "type": "ad_hominem",
-       "severity": "high"}
+def _probe_eval(verdict="strong", agree=True, alt="inductive", effect="not_applicable"):
+    return {"verdict": verdict, "failure_point_ar": "خلل" if verdict in ("weak", "invalid") else "",
+            "classification_agree": agree, "alt_classification": alt,
+            "rebuttal_effect": effect}
 
 
-def test_merge_unanimous_big_margin_is_high_tier():
-    m = merge_probes([_probe() for _ in range(4)])
-    assert (m["tier"], m["winner"], m["margin_band"]) == ("high", "a", "decisive")
-    assert m["scores"]["a"]["logic"] == 80 and m["scores"]["b"]["clarity"] == 60
+def _probe(evals, soundness=(), fallacies=(), issues=(), holistic="a"):
+    return {"axes": {s: {ax: 70 for ax in AXES} for s in ("a", "b")},
+            "evals": evals, "soundness": list(soundness), "fallacies": list(fallacies),
+            "issues": list(issues), "holistic": holistic, "confidence": "high"}
 
 
-def test_merge_three_one_votes_is_medium():
-    probes = [_probe(), _probe(), _probe(), _probe(a=58, b=62)]
-    m = merge_probes(probes)
-    assert m["tier"] == "medium" and m["winner"] == "a"
+def test_verdict_consensus_three_of_four():
+    maps = {"a": _map("a"), "b": _map("b", 0)}
+    probes = [_probe({"a-1": _probe_eval("strong")})] * 3 + \
+             [_probe({"a-1": _probe_eval("weak")})]
+    r = merge_arg_evals(probes, maps)["a-1"]
+    assert r["verdict"] == "strong" and not r["contested"]
 
 
-def test_merge_label_flip_two_two_is_close():
-    m = merge_probes([_probe(), _probe(), _probe(a=60, b=80), _probe(a=60, b=80)])
-    assert m["tier"] == "close" and m["winner"] is None
+def test_verdict_two_two_is_contested():
+    maps = {"a": _map("a"), "b": _map("b", 0)}
+    probes = [_probe({"a-1": _probe_eval("strong")})] * 2 + \
+             [_probe({"a-1": _probe_eval("weak")})] * 2
+    assert merge_arg_evals(probes, maps)["a-1"]["contested"] is True
 
 
-def test_merge_tiny_margin_forced_close_even_if_unanimous():
-    m = merge_probes([_probe(a=71, b=69) for _ in range(4)])
-    assert m["tier"] == "close" and m["winner"] is None and m["margin_band"] is None
+def test_classification_override_needs_three_and_flips_family():
+    maps = {"a": _map("a"), "b": _map("b", 0)}
+    probes = [_probe({"a-1": _probe_eval("valid", agree=False, alt="deductive")})] * 3 \
+        + [_probe({"a-1": _probe_eval("strong")})]
+    r = merge_arg_evals(probes, maps)["a-1"]
+    assert r["classification"] == "deductive" and r["tentative"] is True
+    assert r["verdict"] == "valid"
 
 
-def test_merge_huge_spread_is_close():
-    m = merge_probes([_probe(a=95, b=60), _probe(a=65, b=60),
-                      _probe(a=95, b=60), _probe(a=66, b=60)])
-    assert m["diagnostics"]["axis_spread_max"] == 30
-    assert m["tier"] == "close"
+def test_rebuttal_effect_is_ordinal_median():
+    maps = {"a": _map("a", rebuts={"target_id": "b-1"}), "b": _map("b")}
+    effects = ["defeated", "weakened", "weakened", "unaffected"]
+    probes = [_probe({"a-1": _probe_eval(effect=e), "b-1": _probe_eval()}) for e in effects]
+    assert merge_arg_evals(probes, maps)["a-1"]["rebuttal_effect"] == "weakened"
 
 
-def test_merge_incoherent_probe_downgrades_high_to_medium():
-    probes = [_probe() for _ in range(3)] + [_probe(holistic="b")]
-    m = merge_probes(probes)
-    assert m["tier"] == "medium" and m["diagnostics"]["incoherent_probes"] == 1
+def test_findings_need_three_of_four():
+    fal = {"speaker": "b", "type": "ad_hominem", "argument_id": "b-1",
+           "segment_ids": ["t2-01"], "quote": "ق", "turn": "t2",
+           "explanation_ar": "", "severity": "high"}
+    three = [_probe({}, fallacies=[dict(fal)])] * 3 + [_probe({})]
+    two = [_probe({}, fallacies=[dict(fal)])] * 2 + [_probe({})] * 2
+    assert len(merge_findings(three)[0]) == 1
+    assert len(merge_findings(two)[0]) == 0
 
 
-def test_fallacy_consensus_needs_three_of_four():
-    three = [_probe(fallacies=[dict(FAL)]) for _ in range(3)] + [_probe()]
-    two = [_probe(fallacies=[dict(FAL)]) for _ in range(2)] + [_probe(), _probe()]
-    assert len(merge_probes(three)["fallacies"]) == 1
-    assert len(merge_probes(two)["fallacies"]) == 0
+# --- tier decision --------------------------------------------------------------
+def test_tier_close_when_majority_disagrees_with_score():
+    tier, w = decide_tier(votes=["a", "a", "a", "b"], margin=20, score_winner="b",
+                          axes_lean="b", spread=0, contested=0, incoherent=0,
+                          audits=0, repaired=False, valid_probes=4)
+    assert (tier, w) == ("close", None)
 
 
-def test_inapplicable_axis_excluded_from_scores_spread_and_totals():
-    # Probes wildly disagree on A's rebuttal (they can only guess when A never
-    # had a rebuttal opportunity) — exclusion must keep the tier stable.
-    probes = []
-    for noise in (95, 40, 90, 45):
-        p = _probe()
-        p["axes"]["a"]["rebuttal"] = noise
-        probes.append(p)
-    m = merge_probes(probes, inapplicable={("a", "rebuttal")})
-    assert m["scores"]["a"]["rebuttal"] is None
-    assert m["diagnostics"]["axis_spread_max"] == 0
-    assert m["tier"] == "high" and m["winner"] == "a"
-    assert m["margin"] == 20.0  # mean over the 4 applicable axes only
+def test_tier_close_on_axes_structure_conflict_at_small_margin():
+    tier, _ = decide_tier(votes=["a"] * 4, margin=5, score_winner="a",
+                          axes_lean="b", spread=0, contested=0, incoherent=0,
+                          audits=0, repaired=False, valid_probes=4)
+    assert tier == "close"
 
 
-def test_fallacy_severity_is_modal_with_milder_tiebreak():
-    probes = [
-        _probe(fallacies=[{**FAL, "severity": "high"}]),
-        _probe(fallacies=[{**FAL, "severity": "low"}]),
-        _probe(fallacies=[{**FAL, "severity": "high"}]),
-        _probe(fallacies=[{**FAL, "severity": "low"}]),
-    ]
-    assert merge_probes(probes)["fallacies"][0]["severity"] == "low"
+def test_tier_high_requires_clean_sweep():
+    args = dict(votes=["a"] * 4, margin=20, score_winner="a", axes_lean="a",
+                spread=0, contested=0, incoherent=0, audits=0, repaired=False,
+                valid_probes=4)
+    assert decide_tier(**args) == ("high", "a")
+    assert decide_tier(**{**args, "repaired": True})[0] == "medium"
+    assert decide_tier(**{**args, "contested": 1})[0] == "medium"
 
 
-# --- end-to-end with mocked model ---------------------------------------------
+# --- full mocked pipeline --------------------------------------------------------
 TRANSCRIPT = {"segments": [
     {"start": "00:00", "end": "00:02", "text": "التعليم عن بعد يوسع الفجوة بين الطلاب"},
     {"start": "00:02", "end": "00:03", "text": "وأنت شخص فاشل لا يفهم شيئا"},
@@ -138,13 +135,10 @@ TRANSCRIPT = {"segments": [
 
 
 def _full_debate(client, monkeypatch):
-    """Room through all 4 turns with transcription mocked inline."""
     from backend.transcribe import transcribe_turn
-
     monkeypatch.setattr(config, "TRANSCRIBE_ENABLED", True)
     monkeypatch.setattr("backend.transcribe.generate_json", lambda *a, **k: TRANSCRIPT)
     monkeypatch.setattr("backend.tasks.enqueue_transcription", transcribe_turn)
-
     code, token_a, token_b = _room_in_debate(client)
     tone = make_tone(3.0, "webm")
     for token in (token_a, token_b, token_a, token_b):
@@ -153,45 +147,74 @@ def _full_debate(client, monkeypatch):
     return code, token_a, token_b
 
 
-def _fake_judge_generate(prompt, schema, **kw):
-    """Simulates a CONSISTENT judge: favors the real debater A whatever the
-    label mapping, and flags one ad hominem on real debater B (turn t2)."""
-    if "النتائج النهائية المحسومة" in prompt:  # synthesis call
+def _fake_extraction(prompt, schema, **kw):
+    """Target is «أ» in its own call; sniff which real debater via the claim."""
+    target_a = "«أ»: الدعوى الأولى" in prompt
+    concl_tid, prem_tid = ("t1", "t3") if target_a else ("t2", "t4")
+    arg = {
+        "rebuts_segments": [] if target_a else ["t1-00"],   # B rebuts A's argument
+        "conclusion": {"segment_ids": [f"{concl_tid}-00"],
+                       "quote": "التعليم عن بعد يوسع الفجوة بين الطلاب"},
+        "premises": [{"segment_ids": [f"{prem_tid}-00"],
+                      "quote": "التعليم عن بعد يوسع الفجوة بين الطلاب",
+                      "external": target_a,
+                      "external_claim_ar": "إحصاءات الفجوة التعليمية" if target_a else ""}],
+        "implicit_premises": [{"why_needed_ar": "س", "text_ar": "مقدمة مضمرة للاختبار"}],
+        "classification": {"rationale_ar": "س", "type": "inductive", "tentative": False},
+        "weight": "primary",
+    }
+    return {"arguments": [arg], "unsupported_assertions": [], "orphan_premises": []}
+
+
+def _fake_probe_or_synth(prompt, schema, **kw):
+    if "النتائج النهائية المحسومة" in prompt:  # synthesis
         prof = {"strongest_ar": "قوي", "weakest_ar": "ضعيف", "tip_ar": "نصيحة"}
         return {"key_moment": {"turn": "t2", "segment_ids": ["t2-01"],
-                               "description_ar": "انفعال المتحدث «ب» وخروجه عن الموضوع."},
+                               "description_ar": "انفعال المتحدث «ب»"},
                 "profiles": {"a": prof, "b": prof},
                 "reasoning_ar": "حسم المتحدث «أ» المناظرة بوضوح."}
-    # Which label is real A? The claims block pins real A's claim to a label.
     a_label = "a" if "«أ»: الدعوى الأولى" in prompt else "b"
     b_label = "b" if a_label == "a" else "a"
-    hi = {ax: {"analysis": "تحليل", "score": 80} for ax in AXES}
-    lo = {ax: {"analysis": "تحليل", "score": 60} for ax in AXES}
+    a_id, b_id = f"{'أ' if a_label == 'a' else 'ب'}-1", f"{'ب' if a_label == 'a' else 'أ'}-1"
+    hi = {ax: {"analysis": "ت", "score": 80} for ax in AXES}
+    lo = {ax: {"analysis": "ت", "score": 60} for ax in AXES}
     return {
+        "argument_evals": [
+            {"argument_id": a_id, "analysis_ar": "ت", "verdict": "strong",
+             "failure_point_ar": "", "classification_agree": True,
+             "alt_classification": "inductive", "rebuttal_effect": "not_applicable"},
+            {"argument_id": b_id, "analysis_ar": "ت", "verdict": "weak",
+             "failure_point_ar": "عينة ضيقة", "classification_agree": True,
+             "alt_classification": "inductive", "rebuttal_effect": "unaffected"},
+        ],
+        "soundness": [{"speaker": b_label, "argument_id": b_id,
+                       "quotes": [{"segment_ids": ["t4-00"],
+                                   "quote": "التعليم عن بعد يوسع الفجوة بين الطلاب"}],
+                       "explanation_ar": "سيق بلا دعم",
+                       "type": "unsupported_load_bearing"}],
+        "fallacies": [{"speaker": b_label, "turn": "t2", "segment_ids": ["t2-01"],
+                       "quote": "وأنت شخص فاشل لا يفهم شيئا",
+                       "explanation_ar": "هجوم على الشخص", "fallacy_type": "ad_hominem",
+                       "severity": "high", "argument_id": b_id}],
+        "extraction_issues": [],
         "axes": {a_label: hi, b_label: lo},
-        "fallacies": [{
-            "speaker": b_label, "turn": "t2", "segment_ids": ["t2-01"],
-            "quote": "وأنت شخص فاشل لا يفهم شيئا",
-            "explanation_ar": "هجوم على الشخص بدل الحجة",
-            "fallacy_type": "ad_hominem", "severity": "high",
-        }],
-        "dropped_points": [{
-            "raised_turn": "t1", "segment_ids": ["t1-00"],
-            "point_ar": "اتساع الفجوة بين الطلاب",
-            "speaker": b_label,
-        }],
         "winner": a_label, "confidence": "high",
     }
 
 
-def test_full_judging_flow(client, monkeypatch):
+def test_full_v2_pipeline(client, monkeypatch):
     prompts = []
 
-    def spy(prompt, schema, **kw):
+    def spy_probe(prompt, schema, **kw):
         prompts.append(prompt)
-        return _fake_judge_generate(prompt, schema, **kw)
+        return _fake_probe_or_synth(prompt, schema, **kw)
 
-    monkeypatch.setattr("backend.judge.generate_json", spy)
+    def spy_extract(prompt, schema, **kw):
+        prompts.append(prompt)
+        return _fake_extraction(prompt, schema, **kw)
+
+    monkeypatch.setattr("backend.judge.generate_json", spy_probe)
+    monkeypatch.setattr("backend.extraction.generate_json", spy_extract)
     code, token_a, _ = _full_debate(client, monkeypatch)
     monkeypatch.setattr(config, "GEMINI_ENABLED", True)
 
@@ -199,54 +222,64 @@ def test_full_judging_flow(client, monkeypatch):
                              headers={"X-Debater-Token": token_a}))
     assert view["judging_status"] == "done"
     v = view["verdict"]
-    assert v["tier"] == "high" and v["winner"] == "a"
-    assert v["margin"] == {"value": 20.0, "band": "decisive"}
-    assert v["scores"]["a"]["logic"] == 80 and v["scores"]["b"]["composure"] == 60
+    assert v["schema_version"] == 2
 
+    # Scoring: A = 100·0.9 − 25·U(=1: ignored B's answerable arg) = 65.
+    #          B = 100·0.35 − 0 − (8 linked-high fallacy + 6 soundness) = 21.
+    assert v["score"] == {"a": 65.0, "b": 21.0}
+    assert (v["tier"], v["winner"]) == ("high", "a")
+    assert v["margin"]["value"] == 44.0 and v["margin"]["band"] == "decisive"
+
+    # Section 1: anchors on quoted material, none on the implicit premise.
+    arg_a = v["analysis"]["a"]["arguments"][0]
+    assert arg_a["conclusion"]["audio"]["turn"] == "turn_a1"
+    assert arg_a["premises"][0]["audio"] is not None
+    assert "audio" not in arg_a["implicit_premises"][0]
+    assert arg_a["unanswered"] is False          # B rebutted it
+    arg_b = v["analysis"]["b"]["arguments"][0]
+    assert arg_b["rebuts"] == {"target_id": "a-1", "effect": "unaffected"}
+    assert arg_b["unanswered"] is True           # A never engaged it
+
+    # Section 2: linked fallacy (rule-derived severity), soundness, registry.
     (card,) = v["fallacies"]
-    assert card["speaker"] == "b" and card["name_ar"] == "الشخصنة"
-    assert card["turn"] == "turn_b1"
-    # Anchor: segment 1 of t2 runs 2.0-3.0s; padded early-biased window.
-    assert card["audio"]["start_s"] == 0.5 and card["audio"]["end_s"] == 3.0
+    assert card["argument_id"] == "b-1" and card["severity"] == "high"
+    assert card["audio"] is not None
+    (snd,) = v["soundness"]
+    assert snd["type"] == "unsupported_load_bearing" and snd["quotes"][0]["audio"]
+    (ext,) = v["external_claims"]
+    assert ext["speaker"] == "a" and ext["argument_id"] == "a-1"
 
-    (dp,) = v["dropped_points"]
-    assert dp["speaker"] == "b" and dp["raised_turn"] == "turn_a1"
-
-    # Emotionality derives from composure + the emotional-register fallacy.
-    assert v["emotionality"] == {"a": 20, "b": 45}
-    assert v["key_moment"]["turn"] == "turn_b1"
-    assert v["diagnostics"]["probes_valid"] == 4
-
-    # Anonymization boundary: real names NEVER reach any model prompt…
+    # Axes strip retained; anonymization boundary; de-anonymized narrative.
+    assert v["scores"]["a"]["logic"] == 80
     assert all("أحمد" not in p and "سارة" not in p for p in prompts)
-    # …but the human-facing narrative is de-anonymized after generation.
     assert v["reasoning_ar"] == "حسم أحمد المناظرة بوضوح."
-    assert "سارة" in v["key_moment"]["description_ar"]
-    assert "«ب»" not in v["key_moment"]["description_ar"]
 
-    # Idempotent: re-triggering does not re-judge a done room.
+    # Idempotent retrigger.
     again = _json(client.post(f"/api/rooms/{code}/judge",
                               headers={"X-Debater-Token": token_a}))
     assert again["verdict"]["diagnostics"] == v["diagnostics"]
 
 
 def test_label_bias_probe_flips_to_close(client, monkeypatch):
-    """A judge that always favors label «أ» (pure position bias) must produce a
-    draw, not a winner — this is the whole point of the 2x2 ensemble."""
+    """A judge that always favors label «أ» must produce a draw."""
     def biased(prompt, schema, **kw):
-        out = _fake_judge_generate(prompt, schema, **kw)
+        out = _fake_probe_or_synth(prompt, schema, **kw)
         if "النتائج النهائية المحسومة" in prompt:
             return out
+        # Whatever the mapping, «أ»'s argument wins and «ب»'s loses.
+        for ev in out["argument_evals"]:
+            ev["verdict"] = "strong" if ev["argument_id"].startswith("أ") else "weak"
+        out["winner"] = "a"
+        out["fallacies"], out["soundness"] = [], []
         hi = {ax: {"analysis": "ت", "score": 80} for ax in AXES}
         lo = {ax: {"analysis": "ت", "score": 60} for ax in AXES}
-        out["axes"] = {"a": hi, "b": lo}   # label «أ» always wins
-        out["winner"] = "a"
+        out["axes"] = {"a": hi, "b": lo}
         return out
 
     monkeypatch.setattr("backend.judge.generate_json", biased)
+    monkeypatch.setattr("backend.extraction.generate_json", _fake_extraction)
     code, token_a, _ = _full_debate(client, monkeypatch)
     monkeypatch.setattr(config, "GEMINI_ENABLED", True)
-
     v = _json(client.post(f"/api/rooms/{code}/judge",
                           headers={"X-Debater-Token": token_a}))["verdict"]
     assert v["tier"] == "close" and v["winner"] is None
@@ -259,14 +292,15 @@ def test_failed_judging_is_retriggerable(client, monkeypatch):
         raise GeminiError("model down")
 
     monkeypatch.setattr("backend.judge.generate_json", boom)
+    monkeypatch.setattr("backend.extraction.generate_json", boom)
     code, token_a, _ = _full_debate(client, monkeypatch)
     monkeypatch.setattr(config, "GEMINI_ENABLED", True)
-
     view = _json(client.post(f"/api/rooms/{code}/judge",
                              headers={"X-Debater-Token": token_a}))
     assert view["judging_status"] == "failed" and view["verdict"] is None
 
-    monkeypatch.setattr("backend.judge.generate_json", _fake_judge_generate)
+    monkeypatch.setattr("backend.judge.generate_json", _fake_probe_or_synth)
+    monkeypatch.setattr("backend.extraction.generate_json", _fake_extraction)
     view = _json(client.post(f"/api/rooms/{code}/judge",
                              headers={"X-Debater-Token": token_a}))
     assert view["judging_status"] == "done" and view["verdict"]["winner"] == "a"

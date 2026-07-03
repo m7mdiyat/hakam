@@ -77,17 +77,39 @@ def main() -> int:
 
     v = view["verdict"]
     assert v, f"no verdict; judging_status={view['judging_status']}"
-    print(f"\n=== verdict in {elapsed:.1f}s ===")
+    print(f"\n=== verdict v{v.get('schema_version', 1)} in {elapsed:.1f}s ===")
     print(f"tier={v['tier']} winner={v['winner']} margin={v['margin']}")
+    print(f"درجة الحجاج: {v['score']}  breakdown: "
+          f"{ {s: v['score_breakdown'][s] for s in ('a', 'b')} }")
     for side in ("a", "b"):
-        print(f"scores[{side}] =", v["scores"][side], "| emotionality:", v["emotionality"][side])
+        print(f"axes[{side}] =", v["scores"][side], "| emotionality:", v["emotionality"][side])
     print("diagnostics:", v["diagnostics"])
+    for side in ("a", "b"):
+        print(f"\n--- تحليل حجج «{side}» ---")
+        for arg in v["analysis"][side]["arguments"]:
+            flags = []
+            if arg["rebuts"]: flags.append(f"ترد على {arg['rebuts']['target_id']} ({arg['rebuts']['effect']})")
+            if arg["unanswered"]: flags.append("بقيت بلا رد")
+            print(f"[{arg['id']}] {arg['weight']} · {arg['classification']['type']}"
+                  f" · verdict={arg['verdict']}{' · ' + ' · '.join(flags) if flags else ''}")
+            print(f"  النتيجة: «{arg['conclusion']['quote'][:70]}» audio={arg['conclusion']['audio']}")
+            for p in arg["premises"]:
+                print(f"  مقدمة: «{p['quote'][:70]}»" + (" [خارجية]" if p["external"] else ""))
+            for ip in arg["implicit_premises"]:
+                print(f"  مقدمة مضمرة: ({ip['text_ar'][:70]})")
+            if arg["failure_point_ar"]:
+                print(f"  موضع الخلل: {arg['failure_point_ar']}")
+        for u in v["analysis"][side]["unsupported_assertions"]:
+            print(f"  رأي بلا مقدمات: «{u['quote'][:70]}»")
     for f in v["fallacies"]:
-        print(f"\nfallacy on «{f['speaker']}»: {f['name_ar']} ({f['severity']})")
+        print(f"\nfallacy on «{f['speaker']}»: {f['name_ar']} ({f['severity']})"
+              f" linked={f.get('argument_id')}")
         print(f"  quote: {f['quote']}")
         print(f"  audio: {f['audio']}")
-    for d in v["dropped_points"]:
-        print(f"\ndropped by «{d['speaker']}» (raised {d['raised_turn']}): {d['point_ar']}")
+    for s in v["soundness"]:
+        print(f"\nsoundness on «{s['speaker']}»: {s['name_ar']} — {s['explanation_ar'][:80]}")
+    for e in v["external_claims"]:
+        print(f"\nexternal claim [{e['speaker']}/{e['argument_id']}]: {e['claim_ar'][:80]}")
     if v.get("key_moment"):
         print(f"\nkey moment [{v['key_moment']['turn']}]: {v['key_moment']['description_ar']}")
     print(f"\nreasoning: {v['reasoning_ar']}")

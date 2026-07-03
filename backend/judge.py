@@ -1,22 +1,23 @@
-"""The judge ensemble: 4 deterministic probes -> merge -> synthesis -> verdict.
+"""The Verdict-v2 judge: extract once → evaluate four ways → merge → score.
 
-Robustness design (judge model is Flash-class; safeguards are structural):
-- 2x2 probe matrix: label mapping (which real debater is «أ») x presentation
-  order, all at temperature 0. Every probe is a genuinely different prompt;
-  disagreement between them is the uncertainty signal.
-- Mechanically checkable rubric rules are enforced HERE in code (answerability
-  of dropped points, quote anchoring, segment-id validity) — never trusted to
-  the model.
-- Scores merge by median; the winner needs a strict vote majority AND the
-  score-derived winner to agree; fallacies need >=ceil(0.75*valid_probes)
-  independent detections and a verbatim/fuzzy quote anchor, else no card.
-- Displayed confidence is computed from ensemble behavior (votes, spread,
-  incoherence); the model's self-reported confidence never gates anything.
-- The synthesis call narrates the ALREADY-merged verdict (it cannot re-judge),
-  so the story can never contradict the numbers.
+Pipeline (all temp 0, all Flash):
+  Phase A  2 extraction calls (backend/extraction.py) → canonical argument map
+  Phase B  4 evaluation probes (2×2 label mapping × claims order) judging the
+           SAME map: per-argument verdicts, soundness findings, fallacies
+           (linked to arguments), extraction audits, the 5 axes, holistic winner
+  repair   ≥2 probes flagging the same extraction gap → ONE re-extract+re-probe
+  merge    deterministic consensus over shared argument ids (server code)
+  score    درجة الحجاج (backend/scoring.py): quality-dominant Q, engagement
+           duty U, rule-derived deductions — winner, margins, tiers from it;
+           the 5 axes survive as a demoted strip AND as a cross-check (axes
+           disagreeing with the structured score in sign forces متقاربة)
+  synthesis one call narrating the ALREADY-merged verdict (cannot re-judge)
 
-The judge never sees clock time or real names: turns are t1..tN, speakers are
-«أ»/«ب», and quotes anchor back to transcript segments server-side.
+Safeguards carried whole from v1: the judge never sees clock time or real
+names (turns t1..tN, speakers «أ»/«ب», names injected post-generation into
+display text only); every displayed quote is verbatim-validated and anchored
+to playable audio server-side; confidence is computed from ensemble behavior,
+never self-reported; answerability rules are mechanical.
 """
 from __future__ import annotations
 
@@ -28,30 +29,33 @@ from typing import Optional
 
 from . import config
 from . import state as S
-from .arabic import find_span, strip_names
+from .arabic import strip_names
+from .extraction import (ExtractionError, resolve_rebuts, run_extraction,
+                         _side_spaces, _validate_quoted)
 from .gemini import GeminiError, generate_json
 from .prompts import PROBE_PROMPT, SYNTHESIS_PROMPT
-from .schemas import (AXES, EMOTIONAL_FALLACIES, FALLACY_DEFS_AR, FALLACY_NAMES,
-                      FALLACY_TYPES, SEVERITIES, probe_schema, synthesis_schema)
+from .schemas import (AXES, AXIS_NAMES_AR, EMOTIONAL_FALLACIES, FALLACY_DEFS_AR,
+                      FALLACY_NAMES, FALLACY_TYPES, SEVERITIES, SOUNDNESS_NAMES,
+                      SOUNDNESS_TYPES, probe_schema, synthesis_schema)
+from .scoring import CREDIT, SURVIVAL, compute_score
 from .store import get_store
 
 log = logging.getLogger("hakam.judge")
 
 # Audio-proof padding (bias early — starting late is what breaks trust).
-# Placeholder values pending QA Gate 1's measured error distribution.
 PREROLL_S = 1.5
 POSTROLL_S = 1.0
 
-# Tier thresholds (approved design; tunable against the eval corpus).
-MARGIN_FORCED_CLOSE = 3.0   # below this, declaring a winner is false precision
+# Tier thresholds on the درجة الحجاج scale (Gate-3 priors).
+MARGIN_FORCED_CLOSE = 3.0
 MARGIN_HIGH = 7.0
-SPREAD_HIGH_MAX = 15.0      # per-axis max-min across probes
+SPREAD_HIGH_MAX = 15.0      # axes spread still feeds instability
 SPREAD_CLOSE_MIN = 25.0
 MARGIN_BANDS = ((15.0, "decisive"), (7.0, "clear"), (3.0, "narrow"))
 
 MAX_FALLACY_CARDS_PER_SPEAKER = 3
 
-# (label_for_real_a, presentation order of labels) — 2x2, balanced by design.
+# (label_for_real_a/b, presentation order of labels) — 2×2, balanced by design.
 PROBE_MATRIX = (
     ({"a": "a", "b": "b"}, "ab"),
     ({"a": "a", "b": "b"}, "ba"),
@@ -60,14 +64,16 @@ PROBE_MATRIX = (
 )
 
 LABEL_AR = {"a": "أ", "b": "ب"}
-_SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}  # low=0 .. high=2
+_SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
+_EFFECT_ORDER = ["defeated", "weakened", "unaffected"]
+_DEDUCTIVE_VERDICTS = {"valid", "invalid"}
+_INDUCTIVE_VERDICTS = {"strong", "weak"}
 
 
 # --------------------------------------------------------------------------
-# Transcript view construction
+# Transcript / map views (shared with extraction via lazy imports there)
 # --------------------------------------------------------------------------
 def _turn_infos(room: dict) -> list:
-    """[{tid, entry, index, real}] in chronological order (room turn list)."""
     return [{"tid": f"t{i + 1}", "entry": t, "index": i, "real": t["debater"]}
             for i, t in enumerate(room["turns"])]
 
@@ -121,11 +127,7 @@ def _fallacy_list_text() -> str:
                      for t in FALLACY_TYPES)
 
 
-# --------------------------------------------------------------------------
-# Probe execution + mechanical validation
-# --------------------------------------------------------------------------
 def _valid_segids(room: dict) -> dict:
-    """tid -> set of valid segment ids."""
     out = {}
     for info in _turn_infos(room):
         out[info["tid"]] = {_seg_id(info["tid"], s["i"])
@@ -133,96 +135,163 @@ def _valid_segids(room: dict) -> dict:
     return out
 
 
-def _answerable(room: dict, dropper_real: str, raised_tid: str) -> bool:
-    """A point only counts as dropped if the dropper had a later turn than the
-    turn it was raised in — and it was raised by the opponent."""
-    infos = {i["tid"]: i for i in _turn_infos(room)}
-    raised = infos.get(raised_tid)
-    if raised is None or raised["real"] == dropper_real:
-        return False
-    return any(i["real"] == dropper_real and i["index"] > raised["index"]
-               for i in infos.values())
+def _label_id(real_id: str, mapping: dict) -> str:
+    side, n = real_id.split("-")
+    return f"{LABEL_AR[mapping[side]]}-{n}"
 
 
-def _clean_probe(raw: dict, room: dict, mapping: dict) -> Optional[dict]:
-    """Validate one probe output; unmap labels -> real sides.
-    Returns None if the core (axes/winner) is unusable; strikes bad items."""
+def _render_map(maps: dict, mapping: dict, order: str) -> "tuple[str, dict]":
+    """Argument map as Arabic text for a probe, ids per THIS probe's labels.
+    Returns (text, label_id -> real_id)."""
     label_to_real = {v: k for k, v in mapping.items()}
+    trans = {}
+    blocks = []
+    for label in (["a", "b"] if order == "ab" else ["b", "a"]):
+        real = label_to_real[label]
+        m = maps[real]
+        lines = [f"حجج المتحدث «{LABEL_AR[label]}»:"]
+        if not m["arguments"]:
+            lines.append("  (لم تُستخرج حجج بنيوية)")
+        for arg in m["arguments"]:
+            lid = _label_id(arg["id"], mapping)
+            trans[lid] = arg["id"]
+            cls = arg["classification"]
+            head = (f"[{lid}] ({'رئيسية' if arg['weight'] == 'primary' else 'فرعية'}"
+                    f"، {'استنباطي' if cls['type'] == 'deductive' else 'استقرائي'}"
+                    f"{'، تصنيف تقريبي' if cls['tentative'] else ''})")
+            if arg.get("rebuts"):
+                head += f" — ترد على {_label_id(arg['rebuts']['target_id'], mapping)}"
+            lines.append(head)
+            lines.append(f"  النتيجة {arg['conclusion']['segment_ids']}: «{arg['conclusion']['quote']}»")
+            for p in arg["premises"]:
+                ext = " [مقدمة خارجية]" if p["external"] else ""
+                lines.append(f"  مقدمة {p['segment_ids']}: «{p['quote']}»{ext}")
+            for ip in arg["implicit_premises"]:
+                lines.append(f"  مقدمة مضمرة (من المحلل، غير منطوقة): {ip['text_ar']}")
+        for u in m["unsupported_assertions"]:
+            lines.append(f"  رأي بلا مقدمات {u['segment_ids']}: «{u['quote']}»")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks), trans
+
+
+# --------------------------------------------------------------------------
+# Probe execution + mechanical validation
+# --------------------------------------------------------------------------
+def _clean_probe(raw: dict, room: dict, mapping: dict, trans: dict,
+                 maps: dict) -> Optional[dict]:
+    """Validate one probe output; unmap labels/ids -> real. None if the core
+    (axes/winner/evals) is unusable; bad items are struck individually."""
+    label_to_real = {v: k for k, v in mapping.items()}
+    spaces = _side_spaces(room)
     try:
         axes = {}
         for label in ("a", "b"):
             per = {}
             for ax in AXES:
-                score = int(raw["axes"][label][ax]["score"])
-                per[ax] = max(0, min(100, score))
+                per[ax] = max(0, min(100, int(raw["axes"][label][ax]["score"])))
             axes[label_to_real[label]] = per
         holistic = label_to_real[raw["winner"]]
     except (KeyError, TypeError, ValueError):
         return None
 
-    segids = _valid_segids(room)
-    fallacies, dropped = [], []
+    evals = {}
+    for ev in raw.get("argument_evals") or []:
+        rid = trans.get(ev.get("argument_id"))
+        if rid is None or rid in evals:
+            continue
+        v = ev.get("verdict")
+        if v not in _DEDUCTIVE_VERDICTS | _INDUCTIVE_VERDICTS:
+            continue
+        evals[rid] = {
+            "verdict": v,
+            "failure_point_ar": (ev.get("failure_point_ar") or "").strip(),
+            "classification_agree": bool(ev.get("classification_agree", True)),
+            "alt_classification": ev.get("alt_classification"),
+            "rebuttal_effect": ev.get("rebuttal_effect"),
+        }
+
+    soundness = []
+    for s in raw.get("soundness") or []:
+        try:
+            speaker = label_to_real[s["speaker"]]
+            if s["type"] not in SOUNDNESS_TYPES:
+                continue
+            quotes = []
+            for q in s.get("quotes") or []:
+                v = _validate_quoted(q, spaces[speaker])
+                if v is not None:
+                    quotes.append(v)
+            need = 2 if s["type"] == "self_contradiction" else 1
+            if len(quotes) < need:
+                continue
+            soundness.append({
+                "speaker": speaker, "type": s["type"], "quotes": quotes[:2],
+                "argument_id": trans.get(s.get("argument_id")),
+                "explanation_ar": (s.get("explanation_ar") or "").strip(),
+                "segment_ids": [i for q in quotes[:2] for i in q["segment_ids"]],
+            })
+        except (KeyError, TypeError):
+            continue
+
+    fallacies = []
     for f in raw.get("fallacies") or []:
         try:
-            ids = [i for i in (f.get("segment_ids") or []) if i in segids.get(f["turn"], ())]
-            if (f["fallacy_type"] in FALLACY_TYPES and f["speaker"] in ("a", "b")
-                    and f.get("quote", "").strip() and ids
+            speaker = label_to_real[f["speaker"]]
+            v = _validate_quoted({"quote": f.get("quote"),
+                                  "segment_ids": f.get("segment_ids")}, spaces[speaker])
+            if (f["fallacy_type"] in FALLACY_TYPES and v is not None
                     and f.get("severity") in SEVERITIES):
                 fallacies.append({
-                    "speaker": label_to_real[f["speaker"]], "turn": f["turn"],
-                    "segment_ids": ids, "quote": f["quote"].strip(),
+                    "speaker": speaker, "turn": v["turn"],
+                    "segment_ids": v["segment_ids"], "quote": v["quote"],
                     "explanation_ar": (f.get("explanation_ar") or "").strip(),
                     "type": f["fallacy_type"], "severity": f["severity"],
+                    "argument_id": trans.get(f.get("argument_id")),
                 })
         except (KeyError, TypeError):
             continue
-    for d in raw.get("dropped_points") or []:
-        try:
-            dropper = label_to_real[d["speaker"]]
-            ids = [i for i in (d.get("segment_ids") or []) if i in segids.get(d["raised_turn"], ())]
-            if d.get("point_ar", "").strip() and ids and _answerable(room, dropper, d["raised_turn"]):
-                dropped.append({"speaker": dropper, "raised_turn": d["raised_turn"],
-                                "segment_ids": ids, "point_ar": d["point_ar"].strip()})
-        except (KeyError, TypeError):
-            continue
 
-    totals = {s: sum(axes[s].values()) / len(AXES) for s in ("a", "b")}
-    computed = ("a" if totals["a"] > totals["b"]
-                else "b" if totals["b"] > totals["a"] else None)
-    return {"axes": axes, "fallacies": fallacies, "dropped": dropped,
-            "holistic": holistic, "computed": computed,
+    issues = []
+    for i in raw.get("extraction_issues") or []:
+        ids = [x for x in (i.get("segment_ids") or []) if isinstance(x, str)]
+        if i.get("kind") in ("missed_argument", "misread_argument") and ids:
+            issues.append({"kind": i["kind"], "segment_ids": ids,
+                           "note_ar": (i.get("note_ar") or "").strip()})
+
+    return {"axes": axes, "evals": evals, "soundness": soundness,
+            "fallacies": fallacies, "issues": issues, "holistic": holistic,
             "confidence": raw.get("confidence", "medium")}
 
 
-def _run_probe(room: dict, mapping: dict, order: str) -> Optional[dict]:
+def _run_probe(room: dict, maps: dict, mapping: dict, order: str) -> Optional[dict]:
     turn_ids = [i["tid"] for i in _turn_infos(room)]
     names = _names(room)
+    map_text, trans = _render_map(maps, mapping, order)
     prompt = PROBE_PROMPT.format(
         topic=strip_names(room.get("topic", ""), names),
         claims_block=claims_block(room, mapping, order),
         transcript=transcript_view(room, mapping),
+        argument_map=map_text,
         fallacy_list=_fallacy_list_text(),
     )
-    schema = probe_schema(turn_ids, order)
-    for _ in range(2):  # one full re-ask if the output fails validation
+    schema = probe_schema(turn_ids, sorted(trans.keys()), order)
+    for _ in range(2):
         try:
             raw = generate_json(prompt, schema,
                                 thinking_budget=config.JUDGE_THINKING_BUDGET)
         except GeminiError as e:
             log.warning("probe call failed: %s", e)
             continue
-        cleaned = _clean_probe(raw, room, mapping)
+        cleaned = _clean_probe(raw, room, mapping, trans, maps)
         if cleaned is not None:
             return cleaned
     return None
 
 
 # --------------------------------------------------------------------------
-# Merge (pure; unit-tested directly)
+# Merge v2 (deterministic; unit-tested directly)
 # --------------------------------------------------------------------------
 def _cluster(items: list, key_fn) -> list:
-    """Group per-probe items by key + overlapping segment ids.
-    items: (probe_idx, item). Returns [{item, probes:set, severities:[...]}]."""
     clusters = []
     for probe_idx, item in items:
         placed = False
@@ -247,138 +316,172 @@ def _modal_severity(sevs: list) -> str:
     counts = {s: sevs.count(s) for s in set(sevs)}
     best = max(counts.values())
     return min((s for s, c in counts.items() if c == best),
-               key=lambda s: _SEV_RANK[s])  # tie -> the milder severity
+               key=lambda s: _SEV_RANK[s])
 
 
-def merge_probes(probes: list, inapplicable: Optional[set] = None) -> dict:
-    """Merge validated probes into scores + winner + tier + consensus lists.
+def _family(cls_type: str) -> set:
+    return _DEDUCTIVE_VERDICTS if cls_type == "deductive" else _INDUCTIVE_VERDICTS
 
-    `inapplicable`: {(side, axis)} pairs the format made unscorable (e.g. the
-    rebuttal axis for a debater who never had a turn after an opponent's —
-    probes can only guess there, so their noise must not gate the tier).
-    Excluded axes render as None and count toward nothing."""
-    inapplicable = inapplicable or set()
-    valid = len(probes)
-    scores, spreads, spread = {}, {"a": {}, "b": {}}, 0.0
+
+def merge_arg_evals(probes: list, maps: dict) -> dict:
+    """Per real argument id -> consensus {classification, tentative, verdict,
+    failure_point_ar, rebuttal_effect}. 'contested' when <3 probes agree."""
+    out = {}
     for side in ("a", "b"):
-        scores[side] = {}
-        for ax in AXES:
-            if (side, ax) in inapplicable:
-                scores[side][ax] = None
-                spreads[side][ax] = None
-                continue
-            vals = [p["axes"][side][ax] for p in probes]
-            scores[side][ax] = int(round(statistics.median(vals)))
-            spreads[side][ax] = max(vals) - min(vals)
-            spread = max(spread, spreads[side][ax])
-
-    totals = {
-        s: statistics.mean(v for v in scores[s].values() if v is not None)
-        for s in ("a", "b")
-    }
-    margin = abs(totals["a"] - totals["b"])
-    score_winner = ("a" if totals["a"] > totals["b"]
-                    else "b" if totals["b"] > totals["a"] else None)
-
-    votes = [p["computed"] for p in probes if p["computed"]]
-    top_vote, top_count = None, 0
-    for cand in ("a", "b"):
-        if votes.count(cand) > top_count:
-            top_vote, top_count = cand, votes.count(cand)
-    incoherent = sum(1 for p in probes if p["computed"] and p["holistic"] != p["computed"])
-
-    unanimous = valid == 4 and top_count == 4
-    has_majority = top_count > valid / 2
-    agree = has_majority and score_winner is not None and top_vote == score_winner
-
-    if (valid < 3 or margin < MARGIN_FORCED_CLOSE or spread > SPREAD_CLOSE_MIN
-            or not agree):
-        tier, winner = "close", None
-    elif unanimous and margin >= MARGIN_HIGH and spread <= SPREAD_HIGH_MAX and incoherent == 0:
-        tier, winner = "high", score_winner
-    else:
-        tier, winner = "medium", score_winner
-
-    band = None
-    if winner is not None:
-        band = next((b for lim, b in MARGIN_BANDS if margin >= lim), "narrow")
-
-    threshold = max(1, ceil(0.75 * valid)) if valid else 1
-    fallacies = [
-        {**c["item"], "severity": _modal_severity(c["severities"]),
-         "found_by": len(c["probes"])}
-        for c in _cluster([(i, f) for i, p in enumerate(probes) for f in p["fallacies"]],
-                          key_fn=lambda f: (f["speaker"], f["type"], f["turn"]))
-        if len(c["probes"]) >= threshold
-    ]
-    dropped = [
-        {**c["item"], "found_by": len(c["probes"])}
-        for c in _cluster([(i, d) for i, p in enumerate(probes) for d in p["dropped"]],
-                          key_fn=lambda d: (d["speaker"], d["raised_turn"]))
-        if len(c["probes"]) >= threshold
-    ]
-
-    return {
-        "scores": scores, "margin": round(margin, 2), "margin_band": band,
-        "winner": winner, "tier": tier,
-        "fallacies": fallacies, "dropped_points": dropped,
-        "diagnostics": {
-            "probes_valid": valid, "votes": votes, "incoherent_probes": incoherent,
-            "axis_spread_max": round(spread, 1), "axis_spreads": spreads,
-            "consensus_threshold": threshold,
-        },
-    }
-
-
-# --------------------------------------------------------------------------
-# Anchors, emotionality, synthesis, assembly
-# --------------------------------------------------------------------------
-def _resolve_anchor(room: dict, tid: str, quote: str) -> Optional[dict]:
-    info = next((i for i in _turn_infos(room) if i["tid"] == tid), None)
-    if info is None:
-        return None
-    segs = _segments_ok(info["entry"])
-    span = find_span(quote, segs)
-    if span is None:
-        return None
-    first, last = span
-    duration = info["entry"].get("duration_s") or segs[-1]["end_s"]
-    start = next(s["start_s"] for s in segs if s["i"] == first)
-    end = next(s["end_s"] for s in segs if s["i"] == last)
-    return {"turn": info["entry"]["turn"],
-            "start_s": round(max(0.0, start - PREROLL_S), 2),
-            "end_s": round(min(duration, end + POSTROLL_S), 2)}
-
-
-def _finalize_fallacies(room: dict, merged: dict) -> list:
-    """Anchor quotes; a card whose quote can't be anchored is dropped entirely.
-    Cap per speaker by severity, then chronology."""
-    kept = []
-    for f in merged["fallacies"]:
-        anchor = _resolve_anchor(room, f["turn"], f["quote"])
-        if anchor is None:
-            log.warning("fallacy quote failed to anchor; dropping card (%s)", f["type"])
-            continue
-        name_ar, name_en = FALLACY_NAMES[f["type"]]
-        kept.append({
-            "speaker": f["speaker"], "type": f["type"],
-            "name_ar": name_ar, "name_en": name_en,
-            "quote": f["quote"], "turn": anchor["turn"],
-            "segment_ids": f["segment_ids"], "severity": f["severity"],
-            "explanation_ar": f["explanation_ar"], "audio": anchor,
-        })
-    kept.sort(key=lambda f: (-_SEV_RANK[f["severity"]], f["turn"]))
-    out, seen = [], {"a": 0, "b": 0}
-    for f in kept:
-        if seen[f["speaker"]] < MAX_FALLACY_CARDS_PER_SPEAKER:
-            seen[f["speaker"]] += 1
-            out.append(f)
+        for arg in maps[side]["arguments"]:
+            aid = arg["id"]
+            votes = [p["evals"][aid] for p in probes if aid in p["evals"]]
+            cls = arg["classification"]["type"]
+            tentative = arg["classification"]["tentative"]
+            # Classification override: >=3/4 disagree -> adopt majority alt.
+            disagree = [v["alt_classification"] for v in votes
+                        if not v["classification_agree"]
+                        and v.get("alt_classification") in ("deductive", "inductive")
+                        and v["alt_classification"] != cls]
+            if len(disagree) >= max(1, ceil(0.75 * len(probes))):
+                cls = max(set(disagree), key=disagree.count)
+                tentative = True
+            elif disagree:
+                tentative = True
+            fam = _family(cls)
+            fam_votes = [v for v in votes if v["verdict"] in fam]
+            counts = {}
+            for v in fam_votes:
+                counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
+            threshold = max(1, ceil(0.75 * len(probes)))
+            verdict, failure = "contested", ""
+            for cand, n in sorted(counts.items()):
+                if n >= threshold:
+                    verdict = cand
+                    failure = next((v["failure_point_ar"] for v in fam_votes
+                                    if v["verdict"] == cand and v["failure_point_ar"]), "")
+                    break
+            effect = None
+            if arg.get("rebuts"):
+                effs = sorted(
+                    (_EFFECT_ORDER.index(v["rebuttal_effect"]) for v in votes
+                     if v.get("rebuttal_effect") in _EFFECT_ORDER))
+                effect = _EFFECT_ORDER[effs[len(effs) // 2]] if effs else "unaffected"
+            out[aid] = {"classification": cls, "tentative": tentative,
+                        "verdict": verdict, "failure_point_ar": failure,
+                        "rebuttal_effect": effect,
+                        "votes": len(votes), "contested": verdict == "contested"}
     return out
 
 
+def merge_findings(probes: list) -> "tuple[list, list]":
+    """(consensus fallacies, consensus soundness) at >=ceil(0.75·valid)."""
+    threshold = max(1, ceil(0.75 * len(probes)))
+    fal = [
+        {**c["item"], "severity": _modal_severity(c["severities"]),
+         "found_by": len(c["probes"])}
+        for c in _cluster([(i, f) for i, p in enumerate(probes) for f in p["fallacies"]],
+                          key_fn=lambda f: (f["speaker"], f["type"], f.get("argument_id")))
+        if len(c["probes"]) >= threshold
+    ]
+    snd = [
+        {**c["item"], "found_by": len(c["probes"])}
+        for c in _cluster([(i, s) for i, p in enumerate(probes) for s in p["soundness"]],
+                          key_fn=lambda s: (s["speaker"], s["type"], s.get("argument_id")))
+        if len(c["probes"]) >= threshold
+    ]
+    return fal, snd
+
+
+def collect_audit_flags(probes: list) -> list:
+    """Extraction issues >=2 probes agree on (kind + segment overlap)."""
+    flagged = []
+    for c in _cluster([(i, f) for i, p in enumerate(probes) for f in p["issues"]],
+                      key_fn=lambda f: f["kind"]):
+        if len(c["probes"]) >= 2:
+            flagged.append(c["item"])
+    return flagged
+
+
+# --------------------------------------------------------------------------
+# Scoring inputs (map + consensus -> scoring.py)
+# --------------------------------------------------------------------------
+def _severity_by_linkage(fallacy: dict, maps: dict) -> str:
+    aid = fallacy.get("argument_id")
+    if not aid:
+        return "low"
+    for side in ("a", "b"):
+        for arg in maps[side]["arguments"]:
+            if arg["id"] == aid:
+                return "high" if arg["weight"] == "primary" else "medium"
+    return "low"
+
+
+def _strawman_rebuttal_ids(fallacies: list) -> set:
+    return {f["argument_id"] for f in fallacies
+            if f["type"] == "straw_man" and f.get("argument_id")}
+
+
+def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
+                  soundness: list) -> dict:
+    other = "b" if side == "a" else "a"
+    strawman = _strawman_rebuttal_ids(fallacies)
+
+    # Worst rebuttal effect suffered per target argument.
+    suffered = {}
+    for arg in maps[other]["arguments"]:
+        if arg.get("rebuts") and arg["id"] not in strawman:
+            ev = evals.get(arg["id"]) or {}
+            eff = ev.get("rebuttal_effect")
+            if eff in ("defeated", "weakened"):
+                tid = arg["rebuts"]["target_id"]
+                worst = suffered.get(tid, "unaffected")
+                if _EFFECT_ORDER.index(eff) < _EFFECT_ORDER.index(worst):
+                    suffered[tid] = eff
+
+    credits, negative = [], set()
+    for arg in maps[side]["arguments"]:
+        ev = evals.get(arg["id"]) or {"verdict": "contested"}
+        base = CREDIT.get(ev["verdict"], 0.5)
+        credits.append(base * SURVIVAL.get(suffered.get(arg["id"], "unaffected"), 1.0))
+        if ev["verdict"] in ("invalid", "weak"):
+            negative.add(arg["id"])
+
+    # Engagement duty: which answerable opponent arguments did we address?
+    my_rebuts = {a["rebuts"]["target_id"] for a in maps[side]["arguments"]
+                 if a.get("rebuts") and a["id"] not in strawman}
+    opp_args = []
+    for arg in maps[other]["arguments"]:
+        ev = evals.get(arg["id"]) or {"verdict": "contested"}
+        opp_args.append({"credit": CREDIT.get(ev["verdict"], 0.5),
+                         "answerable": bool(arg.get("answerable")),
+                         "addressed": arg["id"] in my_rebuts})
+
+    return {
+        "credits": credits,
+        "has_assertions": bool(maps[side]["unsupported_assertions"]),
+        "opp_args": opp_args,
+        "fallacies": [f for f in fallacies if f["speaker"] == side],
+        "soundness": [s for s in soundness if s["speaker"] == side],
+        "negative_arg_ids": negative,
+    }
+
+
+def _probe_structured_winner(probe: dict, maps: dict) -> Optional[str]:
+    """One probe's own winner vote via the same scoring function."""
+    scores = {}
+    for side in ("a", "b"):
+        # rule-derived severities on the probe's own items
+        fal = [{**f, "severity": _severity_by_linkage(f, maps)}
+               for f in probe["fallacies"]]
+        scores[side] = compute_score(_score_inputs(
+            side, maps, probe["evals"], fal, probe["soundness"]))["score"]
+    if scores["a"] > scores["b"]:
+        return "a"
+    if scores["b"] > scores["a"]:
+        return "b"
+    return None
+
+
+# --------------------------------------------------------------------------
+# Axes (retained: strip display + cross-check), anchors, emotionality
+# --------------------------------------------------------------------------
 def _inapplicable_axes(room: dict) -> set:
-    """Mechanically undecidable axes: rebuttal is unscorable for a debater who
-    never had a turn after any opponent turn (nothing existed to rebut)."""
     out = set()
     infos = _turn_infos(room)
     for side in ("a", "b"):
@@ -389,46 +492,90 @@ def _inapplicable_axes(room: dict) -> set:
     return out
 
 
-def _emotionality(scores: dict, fallacies: list) -> dict:
+def merge_axes(probes: list, inapplicable: set) -> "tuple[dict, float]":
+    scores, spread = {}, 0.0
+    for side in ("a", "b"):
+        scores[side] = {}
+        for ax in AXES:
+            if (side, ax) in inapplicable:
+                scores[side][ax] = None
+                continue
+            vals = [p["axes"][side][ax] for p in probes]
+            scores[side][ax] = int(round(statistics.median(vals)))
+            spread = max(spread, max(vals) - min(vals))
+    return scores, spread
+
+
+def _axes_lean(axes_scores: dict) -> Optional[str]:
+    tot = {s: statistics.mean(v for v in axes_scores[s].values() if v is not None)
+           for s in ("a", "b")}
+    if abs(tot["a"] - tot["b"]) < 1e-9:
+        return None
+    return "a" if tot["a"] > tot["b"] else "b"
+
+
+def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
+    """Padded playback window for validated segment ids (single turn)."""
+    if not segment_ids:
+        return None
+    tid = segment_ids[0].split("-")[0]
+    info = next((i for i in _turn_infos(room) if i["tid"] == tid), None)
+    if info is None:
+        return None
+    idx = {int(s.split("-")[1]) for s in segment_ids}
+    segs = [s for s in _segments_ok(info["entry"]) if s["i"] in idx]
+    if not segs:
+        return None
+    duration = info["entry"].get("duration_s") or segs[-1]["end_s"]
+    return {"turn": info["entry"]["turn"],
+            "start_s": round(max(0.0, min(s["start_s"] for s in segs) - PREROLL_S), 2),
+            "end_s": round(min(duration, max(s["end_s"] for s in segs) + POSTROLL_S), 2)}
+
+
+def _emotionality(axes_scores: dict, fallacies: list) -> dict:
     out = {}
     for side in ("a", "b"):
-        emo_hits = sum(1 for f in fallacies
-                       if f["speaker"] == side and f["type"] in EMOTIONAL_FALLACIES)
-        val = 100 - scores[side]["composure"] + 5 * min(2, emo_hits)
-        out[side] = max(0, min(100, val))
+        emo = sum(1 for f in fallacies
+                  if f["speaker"] == side and f["type"] in EMOTIONAL_FALLACIES)
+        comp = axes_scores[side].get("composure") or 50
+        out[side] = max(0, min(100, 100 - comp + 5 * min(2, emo)))
     return out
 
 
-def _results_block(merged: dict) -> str:
-    lines = []
-    if merged["winner"] is None:
-        lines.append("النتيجة: متقاربة — لا فائز محسوم؛ ثبت تقارب الأداء عند تدقيق الحكم بترتيبات مختلفة.")
-    else:
-        lines.append(f"الفائز: المتحدث «{LABEL_AR[merged['winner']]}» بفارق {merged['margin']:.0f} نقطة.")
-    from .schemas import AXIS_NAMES_AR
-    for side in ("a", "b"):
-        parts = "، ".join(
-            f"{AXIS_NAMES_AR[ax]}: "
-            + ("غير منطبق" if merged["scores"][side][ax] is None
-               else str(merged["scores"][side][ax]))
-            for ax in AXES)
-        lines.append(f"درجات المتحدث «{LABEL_AR[side]}»: {parts}")
-    for f in merged["fallacies"]:
-        lines.append(f"مغالطة مرصودة على «{LABEL_AR[f['speaker']]}»: {FALLACY_NAMES[f['type']][0]} — «{f['quote']}»")
-    for d in merged["dropped_points"]:
-        lines.append(f"نقطة بلا رد (تركها «{LABEL_AR[d['speaker']]}»): {d['point_ar']}")
-    return "\n".join(lines)
+# --------------------------------------------------------------------------
+# Tier decision
+# --------------------------------------------------------------------------
+def decide_tier(votes: list, margin: float, score_winner: Optional[str],
+                axes_lean: Optional[str], spread: float, contested: int,
+                incoherent: int, audits: int, repaired: bool,
+                valid_probes: int) -> "tuple[str, Optional[str]]":
+    top_vote, top_count = None, 0
+    for cand in ("a", "b"):
+        if votes.count(cand) > top_count:
+            top_vote, top_count = cand, votes.count(cand)
+    has_majority = top_count > valid_probes / 2
+    agree = has_majority and score_winner is not None and top_vote == score_winner
+    axes_conflict = (axes_lean is not None and score_winner is not None
+                     and axes_lean != score_winner and margin < MARGIN_HIGH)
+
+    if (valid_probes < 3 or margin < MARGIN_FORCED_CLOSE or not agree
+            or spread > SPREAD_CLOSE_MIN or axes_conflict):
+        return "close", None
+    if (top_count == valid_probes == 4 and margin >= MARGIN_HIGH
+            and spread <= SPREAD_HIGH_MAX and incoherent == 0
+            and contested == 0 and audits == 0 and not repaired):
+        return "high", score_winner
+    return "medium", score_winner
 
 
+# --------------------------------------------------------------------------
+# Synthesis (narrate-only, unchanged contract)
+# --------------------------------------------------------------------------
 def _deanonymize_display(text: str, room: dict) -> str:
-    """DISPLAY-ONLY, applied strictly AFTER all model calls: swap the synthesis
-    narrative's «المتحدث «أ»» references for the real names humans see. The
-    judge pipeline's inputs stay fully anonymized (strip_names / labels) — this
-    touches nothing that is ever sent to a model, and never touches quotes."""
     if not text:
         return text
     names = {s: room["debaters"][s].get("name")
-             or ("الطرف الأول" if s == "a" else "الطرف الثاني") for s in SIDES_REAL}
+             or ("الطرف الأول" if s == "a" else "الطرف الثاني") for s in ("a", "b")}
     for label, side in (("أ", "a"), ("ب", "b")):
         for pat in (f"المتحدث «{label}»", f"المتحدث ({label})", f"المتحدث {label}",
                     f"المتناظر «{label}»"):
@@ -436,24 +583,53 @@ def _deanonymize_display(text: str, room: dict) -> str:
     return text
 
 
-SIDES_REAL = ("a", "b")
-
-
 _FALLBACK_REASONING = {
     "close": "جاء أداء الطرفين متقاربًا إلى حدّ لا يمكن معه الجزم بمتفوّق، إذ لم يثبت فائز عند تدقيق الحكم بترتيبات مختلفة.",
-    "medium": "رجحت كفة الفائز بهامش ضئيل بعد موازنة المعايير الخمسة.",
-    "high": "تفوق الفائز بوضوح في مجمل معايير التقييم.",
+    "medium": "رجحت كفة الفائز بعد موازنة بناء الحجج والرد عليها.",
+    "high": "تفوق الفائز بوضوح في بناء حججه والرد على حجج خصمه.",
 }
 
+_VERDICT_AR = {"valid": "سليم البناء", "invalid": "مختل البناء",
+               "strong": "حجة قوية", "weak": "حجة ضعيفة", "contested": "تقييم متقارب"}
+_EFFECT_AR = {"defeated": "أسقطتها", "weakened": "أضعفتها", "unaffected": "لم تؤثر"}
 
-def _run_synthesis(room: dict, merged: dict) -> dict:
+
+def _results_block(maps: dict, arg_results: dict, fallacies: list,
+                   soundness: list, scores: dict, winner: Optional[str]) -> str:
+    lines = []
+    if winner is None:
+        lines.append("النتيجة: متقاربة — لا فائز محسوم.")
+    else:
+        lines.append(f"الفائز: المتحدث «{LABEL_AR[winner]}» "
+                     f"({scores['a']['score']:.0f} مقابل {scores['b']['score']:.0f}).")
+    for side in ("a", "b"):
+        lines.append(f"درجة حجاج المتحدث «{LABEL_AR[side]}»: {scores[side]['score']:.0f}")
+        for arg in maps[side]["arguments"]:
+            r = arg_results[arg["id"]]
+            line = (f"- حجة «{arg['conclusion']['quote'][:60]}»: "
+                    f"{_VERDICT_AR[r['verdict']]}")
+            if r["failure_point_ar"]:
+                line += f" — {r['failure_point_ar']}"
+            if arg.get("rebuts") and r["rebuttal_effect"]:
+                line += f" (ردٌّ {_EFFECT_AR[r['rebuttal_effect']]})"
+            if arg.get("unanswered"):
+                line += " (بقيت بلا رد)"
+            lines.append(line)
+    for f in fallacies:
+        lines.append(f"مغالطة على «{LABEL_AR[f['speaker']]}»: {FALLACY_NAMES[f['type']][0]} — «{f['quote'][:60]}»")
+    for s in soundness:
+        lines.append(f"خلل تماسك على «{LABEL_AR[s['speaker']]}»: {SOUNDNESS_NAMES[s['type']]}")
+    return "\n".join(lines)
+
+
+def _run_synthesis(room: dict, results_block: str, tier: str) -> dict:
     turn_ids = [i["tid"] for i in _turn_infos(room)]
     names = _names(room)
-    mapping = {"a": "a", "b": "b"}  # canonical: real a = «أ»
+    mapping = {"a": "a", "b": "b"}
     prompt = SYNTHESIS_PROMPT.format(
         topic=strip_names(room.get("topic", ""), names),
         claims_block=claims_block(room, mapping, "ab"),
-        results_block=_results_block(merged),
+        results_block=results_block,
         transcript=transcript_view(room, mapping),
     )
     try:
@@ -467,43 +643,80 @@ def _run_synthesis(room: dict, merged: dict) -> dict:
             ids = [i for i in (km.get("segment_ids") or []) if i in segids]
             key_moment = {"turn": info["entry"]["turn"],
                           "description_ar": km["description_ar"].strip(),
-                          "segment_ids": ids, "audio": None}
-            if ids:
-                segs = {s: None for s in ids}
-                seg_is = sorted(int(s.split("-")[1]) for s in segs)
-                seg_objs = [x for x in _segments_ok(info["entry"]) if x["i"] in seg_is]
-                if seg_objs:
-                    duration = info["entry"].get("duration_s") or seg_objs[-1]["end_s"]
-                    key_moment["audio"] = {
-                        "turn": info["entry"]["turn"],
-                        "start_s": round(max(0.0, seg_objs[0]["start_s"] - PREROLL_S), 2),
-                        "end_s": round(min(duration, seg_objs[-1]["end_s"] + POSTROLL_S), 2)}
+                          "segment_ids": ids, "audio": _anchor(room, ids)}
         profiles = raw.get("profiles") or {}
         for side in ("a", "b"):
             p = profiles.get(side) or {}
             if not all((p.get("strongest_ar"), p.get("weakest_ar"), p.get("tip_ar"))):
                 raise GeminiError("incomplete synthesis profiles")
-        reasoning = (raw.get("reasoning_ar") or "").strip() or _FALLBACK_REASONING[merged["tier"]]
+        reasoning = (raw.get("reasoning_ar") or "").strip() or _FALLBACK_REASONING[tier]
         return {"key_moment": key_moment, "profiles": profiles, "reasoning_ar": reasoning}
     except GeminiError as e:
         log.warning("synthesis failed, using fallback narrative: %s", e)
         return {"key_moment": None, "profiles": None,
-                "reasoning_ar": _FALLBACK_REASONING[merged["tier"]]}
+                "reasoning_ar": _FALLBACK_REASONING[tier]}
 
 
 # --------------------------------------------------------------------------
-# Entry points
+# Assembly
 # --------------------------------------------------------------------------
 def _needs_transcript(t: dict) -> bool:
     return bool(t.get("audio_uri")) and not t.get("forfeited") \
         and (t.get("transcript") or {}).get("status") != "ok"
 
 
+def _display_map(room: dict, maps: dict, arg_results: dict) -> dict:
+    out = {}
+    for side in ("a", "b"):
+        args = []
+        for arg in maps[side]["arguments"]:
+            r = arg_results[arg["id"]]
+            args.append({
+                "id": arg["id"], "weight": arg["weight"],
+                "classification": {"type": r["classification"], "tentative": r["tentative"]},
+                "verdict": r["verdict"],
+                "failure_point_ar": _deanonymize_display(r["failure_point_ar"], room),
+                "conclusion": {"quote": arg["conclusion"]["quote"],
+                               "audio": _anchor(room, arg["conclusion"]["segment_ids"])},
+                "premises": [
+                    {"quote": p["quote"], "external": p["external"],
+                     "external_claim_ar": p["external_claim_ar"],
+                     "audio": _anchor(room, p["segment_ids"])}
+                    for p in arg["premises"]
+                ],
+                "implicit_premises": [{"text_ar": ip["text_ar"]}
+                                      for ip in arg["implicit_premises"]],
+                "rebuts": ({"target_id": arg["rebuts"]["target_id"],
+                            "effect": r["rebuttal_effect"]}
+                           if arg.get("rebuts") else None),
+                "unanswered": bool(arg.get("unanswered")),
+            })
+        out[side] = {
+            "arguments": args,
+            "unsupported_assertions": [
+                {"quote": u["quote"], "audio": _anchor(room, u["segment_ids"])}
+                for u in maps[side]["unsupported_assertions"]],
+            "orphan_premises": [
+                {"quote": o["quote"], "audio": _anchor(room, o["segment_ids"])}
+                for o in maps[side]["orphan_premises"]],
+        }
+    return out
+
+
+def _external_claims(maps: dict) -> list:
+    out = []
+    for side in ("a", "b"):
+        for arg in maps[side]["arguments"]:
+            for p in arg["premises"]:
+                if p["external"]:
+                    out.append({"speaker": side, "argument_id": arg["id"],
+                                "claim_ar": p["external_claim_ar"], "quote": p["quote"],
+                                "segment_ids": p["segment_ids"]})
+    return out
+
+
 def build_verdict(room: dict) -> dict:
-    # Preflight. The final turn's queue transcription is usually still in
-    # flight when judging starts (the same upload request triggers both), so
-    # WAIT for pending transcripts briefly instead of re-transcribing in a
-    # race with the queue worker (double model calls, last-writer-wins).
+    # Transcript preflight (unchanged from v1): wait for the queue, then retry.
     import time
     deadline = time.time() + 25
     while time.time() < deadline and any(
@@ -511,8 +724,6 @@ def build_verdict(room: dict) -> dict:
             for t in room["turns"] if _needs_transcript(t)):
         time.sleep(2)
         room = get_store().get(room["code"]) or room
-
-    # Last-chance inline transcription only for what the queue never finished.
     from .transcribe import transcribe_turn
     retried = False
     for t in room["turns"]:
@@ -522,18 +733,95 @@ def build_verdict(room: dict) -> dict:
     if retried:
         room = get_store().get(room["code"]) or room
 
-    with ThreadPoolExecutor(max_workers=len(PROBE_MATRIX)) as pool:
-        futures = [pool.submit(_run_probe, room, m, o) for m, o in PROBE_MATRIX]
-        probes = [f.result() for f in futures]
-    probes = [p for p in probes if p is not None]
+    # Phase A: extraction (2 parallel calls), Phase B: probes, one repair round.
+    def _extract(notes=""):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futs = {s: pool.submit(run_extraction, room, s, notes) for s in ("a", "b")}
+            out = {}
+            for s, f in futs.items():
+                try:
+                    out[s] = f.result()
+                except ExtractionError as e:
+                    log.warning("extraction empty for %s: %s", s, e)
+                    out[s] = {"side": s, "arguments": [],
+                              "unsupported_assertions": [], "orphan_premises": []}
+        return resolve_rebuts(out, room)
+
+    def _probe_all(maps):
+        with ThreadPoolExecutor(max_workers=len(PROBE_MATRIX)) as pool:
+            futs = [pool.submit(_run_probe, room, maps, m, o) for m, o in PROBE_MATRIX]
+            return [f.result() for f in futs if f.result() is not None]
+
+    maps = _extract()
+    probes = _probe_all(maps)
     if not probes:
         raise GeminiError("no valid judge probes")
 
-    merged = merge_probes(probes, inapplicable=_inapplicable_axes(room))
-    fallacies = _finalize_fallacies(room, merged)
-    narrative = _run_synthesis(room, merged)
+    repaired = False
+    audit = collect_audit_flags(probes)
+    if audit:
+        notes = "\n".join(f"- {a['kind']}: مقاطع {a['segment_ids']} — {a['note_ar']}"
+                          for a in audit)
+        log.info("extraction repair round triggered: %d flags", len(audit))
+        maps = _extract(notes)
+        probes = _probe_all(maps) or probes
+        repaired = True
+        audit = collect_audit_flags(probes)
 
-    # Human-facing narrative gets real names (model I/O stayed anonymized).
+    # Merge.
+    arg_results = merge_arg_evals(probes, maps)
+    fallacies, soundness = merge_findings(probes)
+    for f in fallacies:  # severity is rule-derived from linkage
+        f["severity"] = _severity_by_linkage(f, maps)
+    axes_scores, axes_spread = merge_axes(probes, _inapplicable_axes(room))
+
+    # Scores (consensus) + per-probe winner votes.
+    scores = {s: compute_score(_score_inputs(s, maps,
+              {k: v for k, v in arg_results.items()}, fallacies, soundness))
+              for s in ("a", "b")}
+    margin = abs(scores["a"]["score"] - scores["b"]["score"])
+    score_winner = ("a" if scores["a"]["score"] > scores["b"]["score"]
+                    else "b" if scores["b"]["score"] > scores["a"]["score"] else None)
+    probe_winners = [_probe_structured_winner(p, maps) for p in probes]
+    votes = [w for w in probe_winners if w]
+    incoherent = sum(1 for p, w in zip(probes, probe_winners)
+                     if w and p["holistic"] != w)
+    contested = sum(1 for r in arg_results.values() if r["contested"])
+
+    tier, winner = decide_tier(
+        votes, margin, score_winner, _axes_lean(axes_scores), axes_spread,
+        contested, incoherent, len(audit), repaired, len(probes))
+    band = None
+    if winner is not None:
+        band = next((b for lim, b in MARGIN_BANDS if margin >= lim), "narrow")
+
+    # Fallacy cards: anchor + cap (validation already guaranteed quotes).
+    cards = []
+    for f in sorted(fallacies, key=lambda f: (-_SEV_RANK[f["severity"]], f["turn"])):
+        name_ar, name_en = FALLACY_NAMES[f["type"]]
+        cards.append({**{k: f[k] for k in ("speaker", "type", "quote", "turn",
+                                           "segment_ids", "severity", "argument_id")},
+                      "name_ar": name_ar, "name_en": name_en,
+                      "explanation_ar": _deanonymize_display(f["explanation_ar"], room),
+                      "audio": _anchor(room, f["segment_ids"])})
+    seen = {"a": 0, "b": 0}
+    capped = []
+    for c in cards:
+        seen[c["speaker"]] += 1
+        if seen[c["speaker"]] <= MAX_FALLACY_CARDS_PER_SPEAKER:
+            capped.append(c)
+    cards = capped
+
+    soundness_cards = [{
+        "speaker": s["speaker"], "type": s["type"],
+        "name_ar": SOUNDNESS_NAMES[s["type"]], "argument_id": s.get("argument_id"),
+        "explanation_ar": _deanonymize_display(s["explanation_ar"], room),
+        "quotes": [{"quote": q["quote"], "audio": _anchor(room, q["segment_ids"])}
+                   for q in s["quotes"]],
+    } for s in soundness]
+
+    results = _results_block(maps, arg_results, fallacies, soundness, scores, winner)
+    narrative = _run_synthesis(room, results, tier)
     narrative["reasoning_ar"] = _deanonymize_display(narrative["reasoning_ar"], room)
     if narrative["key_moment"]:
         narrative["key_moment"]["description_ar"] = _deanonymize_display(
@@ -544,31 +832,34 @@ def build_verdict(room: dict) -> dict:
             for k in ("strongest_ar", "weakest_ar", "tip_ar"):
                 p[k] = _deanonymize_display(p[k], room)
 
-    turn_key_of = {i["tid"]: i["entry"]["turn"] for i in _turn_infos(room)}
-    dropped = [{"speaker": d["speaker"], "point_ar": d["point_ar"],
-                "raised_turn": turn_key_of.get(d["raised_turn"], d["raised_turn"]),
-                "segment_ids": d["segment_ids"]}
-               for d in merged["dropped_points"]]
-
     return {
-        "tier": merged["tier"],
-        "winner": merged["winner"],
-        "margin": {"value": merged["margin"], "band": merged["margin_band"]},
-        "scores": merged["scores"],
-        "emotionality": _emotionality(merged["scores"], fallacies),
-        "fallacies": fallacies,
-        "dropped_points": dropped,
+        "schema_version": 2,
+        "tier": tier,
+        "winner": winner,
+        "margin": {"value": round(margin, 1), "band": band},
+        "score": {s: scores[s]["score"] for s in ("a", "b")},
+        "score_breakdown": scores,
+        "analysis": _display_map(room, maps, arg_results),
+        "soundness": soundness_cards,
+        "external_claims": _external_claims(maps),
+        "fallacies": cards,
+        "scores": axes_scores,           # the demoted strip (+ v1 fallback shape)
+        "emotionality": _emotionality(axes_scores, fallacies),
         "key_moment": narrative["key_moment"],
         "profiles": narrative["profiles"],
         "reasoning_ar": narrative["reasoning_ar"],
-        "diagnostics": {**merged["diagnostics"], "model": config.GEMINI_MODEL},
+        "diagnostics": {
+            "probes_valid": len(probes), "votes": votes, "incoherent_probes": incoherent,
+            "contested_args": contested, "audit_flags": len(audit),
+            "repaired": repaired, "axis_spread_max": round(axes_spread, 1),
+            "model": config.GEMINI_MODEL,
+        },
         "created_at": S.now_utc().isoformat(),
     }
 
 
 def run_judging(code: str) -> dict:
-    """Lease-guarded judging: claim -> build -> write. Returns the room.
-    Safe to call from any request that observes state == deliberating."""
+    """Lease-guarded judging: claim -> build -> write. Returns the room."""
     store = get_store()
     claimed = {}
 
@@ -581,6 +872,6 @@ def run_judging(code: str) -> dict:
     try:
         verdict = build_verdict(room)
         return store.update(code, lambda r: S.finish_judging(r, verdict, S.now_utc()))
-    except Exception as e:  # keep the room consistent; clients can retrigger
+    except Exception as e:
         log.exception("judging failed for room %s", code)
         return store.update(code, lambda r: S.fail_judging(r, str(e)[:200], S.now_utc()))
