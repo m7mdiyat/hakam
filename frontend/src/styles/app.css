@@ -105,7 +105,10 @@ button { font-family: inherit; }
   font-size: 15px; font-family: inherit; outline: none;
   transition: border-color 0.15s;
 }
-.input::placeholder { color: var(--muted-2); }
+/* Readex Pro's isolated ع (e.g. «موضوع») has a hairline joint that dissolves
+   at small sizes in faint gray — placeholders get a touch more weight and
+   contrast so the letterforms rasterize intact. */
+.input::placeholder { color: var(--muted); font-weight: 500; }
 .input:focus { border-color: rgba(201, 164, 92, 0.5); }
 .textarea { height: auto; padding: 14px 18px; line-height: 1.7; resize: none; }
 .input-code { text-align: center; letter-spacing: 0.3em; text-transform: uppercase; }
@@ -226,17 +229,33 @@ button { font-family: inherit; }
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   transition: transform 0.1s, background 0.15s, border-color 0.15s;
 }
+.mic { position: relative; }
 .mic-glyph { display: flex; pointer-events: none; }
+/* Idle (your turn): colored outline + a slow breathe that invites pressing. */
 .mic-idle.mic-a { border-color: rgba(63, 184, 175, 0.5); }
 .mic-idle.mic-b { border-color: rgba(242, 115, 95, 0.5); }
+.mic-idle { animation: micbreathe 2.6s ease-in-out infinite; }
 .mic-idle:hover { background: #191920; }
+/* Recording: solid fill inversion + sonar rings radiating past the fingertip
+   (the finger covers the orb mid-hold, so the signal must escape it). */
 .mic-recording.mic-a { background: var(--teal); border-color: var(--teal); }
 .mic-recording.mic-b { background: var(--coral); border-color: var(--coral); }
-.mic-recording { animation: micpulse 1.2s ease-in-out infinite; }
+.mic-recording::before, .mic-recording::after {
+  content: ''; position: absolute; inset: -2px; border-radius: 50%;
+  border: 2px solid var(--mic-color, var(--gold));
+  animation: micring 1.5s ease-out infinite; pointer-events: none;
+}
+.mic-recording::after { animation-delay: 0.75s; }
+/* Uploading: fill drops back to surface, thin progress ring spins. */
 .mic-uploading { border-color: var(--line-14); opacity: 0.85; }
+.mic-uploading::before {
+  content: ''; position: absolute; inset: -7px; border-radius: 50%;
+  border: 2px solid var(--line-14); border-top-color: var(--mic-color, var(--gold));
+  animation: micspin 0.9s linear infinite; pointer-events: none;
+}
 .mic-waiting { opacity: 0.6; }
 .mic:disabled { cursor: default; }
-.mic-label { font-size: 12.5px; }
+.mic-label { font-size: 12.5px; font-variant-numeric: tabular-nums; }
 
 .dots { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
 .dot-item { display: flex; align-items: center; gap: 6px; }
@@ -389,12 +408,20 @@ button { font-family: inherit; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@keyframes micpulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.12); }
-  50% { transform: scale(1.04); box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+@keyframes micbreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
 }
+@keyframes micring {
+  0% { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+@keyframes micspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .dot-b, .mic-recording { animation: none; }
+  .dot-b, .mic-idle { animation: none; }
+  /* Recording keeps a STATIC double halo — state still unmistakable, no motion. */
+  .mic-recording::before { animation: none; transform: scale(1.18); opacity: 0.4; }
+  .mic-recording::after { animation: none; transform: scale(1.4); opacity: 0.2; }
 }
 
 /* ==========================================================================
@@ -424,7 +451,9 @@ button { font-family: inherit; }
   .screen-body { padding: 8px 56px 48px; gap: 22px; overflow: visible; flex: 1 0 auto; }
 
   /* --- Landing --- */
-  .landing { justify-content: center; gap: 48px; }
+  /* Bias the centered stack upward: the wordmark's optical mass belongs a bit
+     above geometric center, not drifting toward the bottom of tall viewports. */
+  .landing { justify-content: center; gap: 48px; padding-bottom: 10vh; }
   .hero { gap: 20px; }
   .wordmark { font-size: 118px; }
   .tagline { font-size: 23px; }

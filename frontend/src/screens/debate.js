@@ -100,8 +100,25 @@ export function mountDebate(root, ctx) {
     return !!ct && sideOf(ct) === mine && !uploading;
   }
 
+  // Live elapsed counter while recording (started by TurnRecorder.onStart, i.e.
+  // when the mic is actually capturing — not while the permission prompt is up).
+  let recTick = null;
+  let recStartedAt = 0;
+  function startRecTick() {
+    recStartedAt = performance.now();
+    const paint = () => {
+      micLabel.textContent = `جارٍ التسجيل… ${fmtClock(performance.now() - recStartedAt)}`;
+    };
+    paint();
+    recTick = setInterval(paint, 500);
+  }
+  function stopRecTick() {
+    if (recTick) { clearInterval(recTick); recTick = null; }
+  }
+
   function setMic(kind) {
     // kind: 'idle' | 'recording' | 'uploading' | 'waiting'
+    if (kind !== 'recording') stopRecTick();
     micBtn.className = `mic mic-${kind} mic-${mine}`;
     micBtn.style.setProperty('--mic-color', sideColor(mine));
     if (kind === 'recording') {
@@ -150,10 +167,22 @@ export function mountDebate(root, ctx) {
     setMic('recording');
     rec = new TurnRecorder({
       maxMs: rem,
+      onStart: () => { if (recording) startRecTick(); },
       onStop: onRecorded,
+      onDiscard: onDiscarded,
       onError: () => { recording = false; refreshMic(); toast('تعذّر الوصول للميكروفون'); },
     });
     rec.start();
+  }
+
+  // Terminal no-upload outcomes (too short / canceled / empty / error). Without
+  // this reset a sub-400ms tap used to wedge `recording=true` forever — the orb
+  // stuck on «جارٍ التسجيل» with every tap ignored.
+  function onDiscarded(reason) {
+    recording = false;
+    refreshMic();
+    if (reason === 'too_short') toast('اضغط مطوّلاً أثناء التحدث ثم ارفع إصبعك');
+    else if (reason === 'empty' || reason === 'error') toast('تعذّر التسجيل — حاول مجددًا');
   }
   function stopRec() { if (recording && rec) rec.stop(); }
   function cancelRec() { if (recording && rec) { recording = false; rec.cancel(); refreshMic(); } }
@@ -313,6 +342,7 @@ export function mountDebate(root, ctx) {
     update: apply,
     unmount() {
       if (raf) cancelAnimationFrame(raf);
+      stopRecTick();
       if (recording && rec) rec.cancel();
       try { audioEl.pause(); } catch { /* ignore */ }
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });

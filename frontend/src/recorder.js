@@ -26,21 +26,40 @@ export function pickMime() {
 const MIN_MS = 400;
 
 export class TurnRecorder {
-  constructor({ maxMs = 120000, onStart, onStop, onError } = {}) {
+  // Every started recording ends in EXACTLY ONE of:
+  //   onStop(blob, ms) — a usable take, or
+  //   onDiscard(reason) — 'too_short' | 'canceled' | 'empty' | 'error'.
+  // Callers key their UI state off these; a recorder that could end silently
+  // (the old <MIN_MS path) wedges the caller's "recording" flag forever.
+  constructor({ maxMs = 120000, onStart, onStop, onDiscard, onError } = {}) {
     this.maxMs = maxMs;
     this.onStart = onStart;
     this.onStop = onStop;
+    this.onDiscard = onDiscard;
     this.onError = onError;
     this.recording = false;
+    this._pending = false;   // getUserMedia in flight
+    this._abort = false;     // stop()/cancel() arrived while pending
     this._canceled = false;
   }
 
   async start() {
-    if (this.recording) return;
+    if (this.recording || this._pending) return;
+    this._pending = true;
+    this._abort = false;
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
+      this._pending = false;
       if (this.onError) this.onError(e);
+      return;
+    }
+    this._pending = false;
+    if (this._abort) {
+      // Released before the mic was even acquired: never start an orphaned
+      // recording — release the stream and report a discard.
+      this._cleanup();
+      this._discard(this._abortCanceled ? 'canceled' : 'too_short');
       return;
     }
     this._canceled = false;
@@ -60,12 +79,21 @@ export class TurnRecorder {
   cancel() { this._end(true); }
 
   _end(canceled) {
-    if (!this.recording) return;
+    if (!this.recording) {
+      if (this._pending) { this._abort = true; this._abortCanceled = canceled; }
+      return;
+    }
     this.recording = false;
     this._canceled = canceled;
     clearTimeout(this._timer);
-    try { if (this.rec && this.rec.state !== 'inactive') this.rec.stop(); }
-    catch { this._cleanup(); }
+    let stopping = false;
+    try {
+      if (this.rec && this.rec.state !== 'inactive') { this.rec.stop(); stopping = true; }
+    } catch { /* fall through to the discard below */ }
+    if (!stopping) {  // no onstop will ever fire — report terminally now
+      this._cleanup();
+      this._discard('error');
+    }
   }
 
   _finish() {
@@ -73,8 +101,14 @@ export class TurnRecorder {
     const type = (this.chunks[0] && this.chunks[0].type) || pickMime() || 'audio/webm';
     const blob = new Blob(this.chunks, { type });
     this._cleanup();
-    if (this._canceled || durationMs < MIN_MS || blob.size === 0) return;
+    if (this._canceled) return this._discard('canceled');
+    if (durationMs < MIN_MS) return this._discard('too_short');
+    if (blob.size === 0) return this._discard('empty');
     if (this.onStop) this.onStop(blob, durationMs);
+  }
+
+  _discard(reason) {
+    if (this.onDiscard) this.onDiscard(reason);
   }
 
   _cleanup() {
