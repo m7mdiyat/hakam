@@ -11,14 +11,25 @@ Arabic AI debate judge. Two people join a room via invite link, each states a cl
 
 ## Stack
 
-- Frontend: Vite vanilla JS SPA (no framework), Arabic RTL (`<html dir="rtl" lang="ar">`), Readex Pro via Google Fonts
+- Frontend: Vite vanilla JS SPA (no framework), Arabic RTL (`<html dir="rtl" lang="ar">`), self-hosted variable Readex Pro (woff2 unicode-range subsets in `frontend/public/fonts/`)
 - Visual spec: `/design/*.png` — dark ink background, brass/gold accent (verdict + primary CTAs only), Debater A = teal, Debater B = coral, everywhere and consistently
 - Backend: Python Flask on Cloud Run
 - Room state: Firestore (native mode), `rooms` collection — never in-memory (Cloud Run instances restart/scale)
 - Audio: GCS `hakam-audio`, lifecycle rule deletes objects after 2 days. Audio never stored in repo or Firestore
 - Realtime sync: frontend polls `GET /api/rooms/{code}` every 2s. No WebSockets in MVP
-- Serving: Flask serves the built `dist/` as static files → one Cloud Run service, one URL, no CORS setup
+- Hosting: **split** — frontend on GitHub Pages (`thehakam.com`), backend API-only on Cloud Run, CORS-restricted; the Cloud Run root redirects to the frontend (see «Hosting & CORS» below)
 - No user accounts. First names only. Room codes: 6 chars (unambiguous set, no 0/O/1/I), expire after 24h
+
+## Hosting & CORS (split: GitHub Pages + Cloud Run)
+
+Frontend and backend are hosted separately — this replaced the original single-origin plan:
+
+- **Frontend** → GitHub Pages at `thehakam.com`, built + published by `.github/workflows/deploy-pages.yml` on push to `main` touching `frontend/**`. `frontend/public/CNAME` = `thehakam.com`; Vite `base: '/'` (custom apex domain). SPA deep links (`/j/CODE`, `/r/CODE`) survive a direct load/refresh via `frontend/public/404.html` + a decode snippet in `index.html` (GitHub Pages has no server-side routing).
+- **Backend** → API-only Flask on Cloud Run: serves `/api/*` + `/health`, and **302-redirects every other path to `HAKAM_FRONTEND_URL`** (default `https://thehakam.com`), preserving path + query so old Cloud-Run links map over. The Dockerfile no longer builds or serves the SPA.
+- **Backend URL** (frontend build var): `frontend/src/api.js` calls `${VITE_API_BASE_URL}/api/...`. `frontend/.env.production` = Cloud Run URL (`https://hakam-176728126674.me-central1.run.app`), `frontend/.env.development` = `http://localhost:8080`, empty = relative `/api`. These `.env.*` hold only public URLs and ARE committed.
+- **CORS** (flask-cors in `backend/app.py`): scoped to `/api/*`, restricted to `HAKAM_CORS_ORIGINS` (default `https://thehakam.com,http://localhost:5173`). Reflects the matching origin — **never `*`** — and handles preflight + the `X-Debater-Token` header; `supports_credentials=False` (bearer token in a header, no cookies).
+- Health is at **`/health`** — Cloud Run's Google Front End reserves `/healthz` and 404s it before it reaches the container.
+- Local dev: backend on `:8080` (`HAKAM_LOCAL=1`), Vite UI on `:5173` calling it cross-origin (CORS allows `localhost:5173`).
 
 ## Data flow
 
@@ -74,5 +85,5 @@ All UI text in Arabic. Western tabular numerals for timers/scores. RTL must be r
 
 - Plan first: before implementing any feature, present the plan (files, endpoints, data shapes) and wait for approval
 - Root-cause over guessing when debugging
-- Never commit: `.env`, keys, service-account JSON, `node_modules`, `dist`, audio files
-- Deploy: `gcloud run deploy hakam --source . --region me-central1` (exact flags decided at first deploy)
+- Never commit: root `.env`, keys, service-account JSON, `node_modules`, `dist`, audio files. (`frontend/.env.{production,development}` hold only public backend URLs and ARE committed.)
+- Deploy backend: `export CLOUDSDK_ACTIVE_CONFIG_NAME=hakam` then `gcloud run deploy hakam --source . --project hakam-501212 --region me-central1 --set-env-vars GOOGLE_CLOUD_PROJECT=hakam-501212,HAKAM_AUDIO_BUCKET=hakam-audio` (public; on redeploys omit `--allow-unauthenticated`, access is preserved). Frontend auto-deploys to GitHub Pages via the Actions workflow.
