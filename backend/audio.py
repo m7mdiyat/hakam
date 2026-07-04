@@ -94,7 +94,7 @@ def analyze_audio(path: Path, duration_s: float) -> dict:
     real debates: silent turns -91, quietest real turn -6). speech_end_s is
     where audible content actually stops — the transcription coverage check
     compares the transcript's end against it, so a model that stops
-    transcribing mid-speech gets caught. silences is the list of [start, end]
+    transcribing mid-speech gets caught. silences is the list of {s, e}
     quiet intervals (≥ SILENCE_MIN_S): the measured word boundaries that
     audio-proof anchors snap to (model timestamps are whole-second MM:SS).
     """
@@ -130,7 +130,9 @@ def analyze_audio(path: Path, duration_s: float) -> dict:
         "max_db": vols.get("max", 0.0),
         "mean_db": vols.get("mean", 0.0),
         "speech_end_s": round(max(0.0, min(speech_end, duration_s)), 2),
-        "silences": [[round(s, 2), round(e, 2)] for s, e in silences],
+        # Maps, not [start, end] pairs: this lands on the Firestore room doc,
+        # and Firestore rejects arrays nested directly inside arrays.
+        "silences": [{"s": round(s, 2), "e": round(e, 2)} for s, e in silences],
     }
 
 

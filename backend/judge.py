@@ -576,10 +576,12 @@ def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
     raw_start = min(s["start_s"] for s in segs)
     raw_end = max(s["end_s"] for s in segs)
 
-    silences = (info["entry"].get("audio_stats") or {}).get("silences")
-    if silences is None:  # pre-snapping upload: coarse times, keep wide pads
+    stored = (info["entry"].get("audio_stats") or {}).get("silences")
+    if stored is None:  # pre-snapping upload: coarse times, keep wide pads
         start, end = raw_start - LEGACY_PREROLL_S, raw_end + LEGACY_POSTROLL_S
     else:
+        # Stored as {s, e} maps (Firestore forbids nested arrays); snap on pairs.
+        silences = [(iv["s"], iv["e"]) for iv in stored]
         start, s_hit = _snap_to_boundary(raw_start, silences, "start")
         end, e_hit = _snap_to_boundary(raw_end, silences, "end")
         if end - start < 0.4:  # snapped into a sliver/inversion — trust raw span

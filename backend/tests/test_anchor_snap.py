@@ -15,7 +15,8 @@ from backend.judge import (
     _snap_to_boundary,
 )
 
-SILENCES = [[2.0, 2.6], [5.0, 5.5]]
+SILENCES = [(2.0, 2.6), (5.0, 5.5)]                      # decoded pairs (snap input)
+SILENCES_DOC = [{"s": s, "e": e} for s, e in SILENCES]   # stored shape (Firestore-safe)
 
 
 def test_snap_start_to_nearby_speech_onset():
@@ -52,7 +53,7 @@ def _room(audio_stats):
 
 
 def test_anchor_snaps_and_pads_inside_the_pauses():
-    a = _anchor(_room({"silences": SILENCES}), ["t1-00"])
+    a = _anchor(_room({"silences": SILENCES_DOC}), ["t1-00"])
     # start: onset 2.6 minus the tight preroll; end: offset 5.0 plus postroll —
     # both pads sit inside measured silence, never inside neighbouring speech.
     assert a["start_s"] == pytest.approx(2.6 - PREROLL_S)

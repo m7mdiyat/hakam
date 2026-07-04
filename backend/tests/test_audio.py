@@ -43,8 +43,8 @@ def test_silence_intervals_detected_without_moving_speech_end():
     # (the transcription coverage check was calibrated against that).
     _, duration, stats = transcode_to_m4a(make_gapped_tone(2.0, 1.0, 2.0), "audio/webm")
     assert stats["speech_end_s"] == pytest.approx(duration, abs=0.5)
-    gaps = [iv for iv in stats["silences"] if iv[0] == pytest.approx(2.0, abs=0.4)]
-    assert gaps and gaps[0][1] == pytest.approx(3.0, abs=0.4)
+    gaps = [iv for iv in stats["silences"] if iv["s"] == pytest.approx(2.0, abs=0.4)]
+    assert gaps and gaps[0]["e"] == pytest.approx(3.0, abs=0.4)
 
 
 def test_trailing_silence_still_sets_speech_end():

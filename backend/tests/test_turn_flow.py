@@ -85,3 +85,33 @@ def test_unreadable_audio_rejected(client):
     res = _submit(client, code, token_a, b"x" * 2048, "audio/webm", "turn.webm")
     assert res.status_code == 400
     assert res.get_json()["error"] == "bad_audio"
+
+
+def _assert_firestore_safe(value, path="room"):
+    # Firestore rejects an array nested directly inside an array («Property
+    # array contains an invalid nested entity») — the local JSON/memory store
+    # doesn't, so without this walk a bad shape only explodes in production.
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _assert_firestore_safe(v, f"{path}.{k}")
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            assert not isinstance(v, (list, tuple)), \
+                f"nested array at {path}[{i}] — Firestore would reject this doc"
+            _assert_firestore_safe(v, f"{path}[{i}]")
+
+
+def test_room_doc_stays_firestore_safe_after_submit(client):
+    from backend.store import get_store
+
+    from .conftest import make_gapped_tone
+
+    code, token_a, _ = _room_in_debate(client)
+    # A take with a real pause populates audio_stats.silences — the field that
+    # once shipped as [[start, end], ...] and broke every production submit.
+    view = _json(_submit(client, code, token_a, make_gapped_tone(2.0, 1.0, 2.0),
+                         "audio/webm", "turn.webm"))
+    assert view["state"] == "turn_b1"
+    room = get_store().get(code)
+    assert room["turns"][0]["audio_stats"]["silences"]  # the pause was measured
+    _assert_firestore_safe(room)
