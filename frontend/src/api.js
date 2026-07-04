@@ -46,6 +46,12 @@ export const api = {
       body: JSON.stringify({ rounds_per_side: roundsPerSide }),
     }).then(handle),
 
+  // Creator rewords the topic (pre-debate only; resets both ready flags).
+  setTopic: (code, token, topic) =>
+    fetch(`${API}/rooms/${code}/topic`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ topic }),
+    }).then(handle),
+
   // Start the server-stamped speaking clock (fired when the mic is tapped).
   startTurn: (code, token) =>
     fetch(`${API}/rooms/${code}/turns/start`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),

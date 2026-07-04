@@ -34,12 +34,56 @@ export function mountLobby(root, ctx) {
       <button class="btn" data-primary></button>
     </div>`;
 
-  root.querySelector('[data-topic]').textContent = '';
   root.querySelector('[data-invite]').textContent = inviteLink.replace(/^https?:\/\//, '');
 
   root.querySelector('[data-copy]').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(inviteLink); toast('نُسخ الرابط'); }
     catch { toast('انسخ الرابط يدويًا'); }
+  });
+
+  // --- topic row: creator can reword it pre-debate (resets both ready flags) --
+  const topicEl = root.querySelector('[data-topic]');
+  let editingTopic = false;
+
+  function renderTopicRow(state) {
+    if (editingTopic) return;   // an open editor is never stomped by the poll
+    topicEl.classList.remove('topic-editing');
+    topicEl.innerHTML = `<span class="topic-text"></span>${mine === 'a'
+      ? '<button type="button" class="edit-link" data-edit-topic>تعديل</button>' : ''}`;
+    topicEl.querySelector('.topic-text').textContent = state.topic;
+  }
+
+  function openTopicEditor() {
+    editingTopic = true;
+    topicEl.classList.add('topic-editing');
+    topicEl.innerHTML = `
+      <div class="topic-editor">
+        <textarea class="input textarea" data-topic-input rows="2" maxlength="300"></textarea>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-topic-save>حفظ الموضوع</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-topic-cancel>إلغاء</button>
+        </div>
+      </div>`;
+    const input = topicEl.querySelector('[data-topic-input]');
+    input.value = lastState ? lastState.topic : '';
+    input.focus();
+    topicEl.querySelector('[data-topic-cancel]').addEventListener('click', () => {
+      editingTopic = false;
+      if (lastState) renderTopicRow(lastState);
+    });
+    topicEl.querySelector('[data-topic-save]').addEventListener('click', async () => {
+      const t = input.value.trim();
+      if (!t) { toast('اكتب موضوع المناظرة.'); return; }
+      try {
+        const view = await api.setTopic(code, token, t);
+        editingTopic = false;
+        apply(view);
+      } catch (e) { toast(e.message || 'تعذّر تعديل الموضوع'); }
+    });
+  }
+
+  topicEl.addEventListener('click', (e) => {
+    if (mine === 'a' && e.target.closest('[data-edit-topic]')) openTopicEditor();
   });
 
   const slot = { a: root.querySelector('[data-slot-a]'), b: root.querySelector('[data-slot-b]') };
@@ -70,10 +114,12 @@ export function mountLobby(root, ctx) {
           <div class="dcard-status">${statusHTML(side, d)}</div>
         </div>
         ${d.claim ? `<div class="claim-quote claim-${side}">«${esc(d.claim)}»</div>` : ''}
+        ${d.claim && side === mine
+          ? '<button type="button" class="edit-link" data-edit-claim>تعديل الدعوى</button>' : ''}
       </div>`;
   }
 
-  function myFormCard(side) {
+  function myFormCard(side, withCancel) {
     return `
       <div class="dcard dcard-${side}">
         <div class="dcard-head">
@@ -88,13 +134,30 @@ export function mountLobby(root, ctx) {
         <div class="field"><input class="input" data-my-name maxlength="40" placeholder="اسمك الأول" autocomplete="off" /></div>
         <div class="field"><textarea class="input textarea" data-my-claim rows="2" maxlength="400" placeholder="اكتب دعواك في جملة"></textarea></div>
         <div class="form-error" data-my-error hidden></div>
-        <button class="btn btn-ghost btn-sm" data-save-claim>حفظ الدعوى</button>
+        <div class="form-actions">
+          <button class="btn btn-ghost btn-sm" data-save-claim>حفظ الدعوى</button>
+          ${withCancel ? '<button class="btn btn-ghost btn-sm" data-cancel-claim>إلغاء</button>' : ''}
+        </div>
       </div>`;
   }
 
-  function mountMyForm(side) {
-    slot[side].innerHTML = myFormCard(side);
+  let editingClaim = false;
+
+  function mountMyForm(side, prefill) {
+    slot[side].innerHTML = myFormCard(side, !!prefill);
     myFormShown = true;
+    if (prefill) {
+      slot[side].querySelector('[data-my-name]').value = prefill.name || '';
+      slot[side].querySelector('[data-my-claim]').value = prefill.claim || '';
+    }
+    const cancel = slot[side].querySelector('[data-cancel-claim]');
+    if (cancel) {
+      cancel.addEventListener('click', () => {
+        editingClaim = false;
+        myFormShown = false;
+        if (lastState) apply(lastState);
+      });
+    }
     slot[side].querySelector('[data-save-claim]').addEventListener('click', async () => {
       const name = slot[side].querySelector('[data-my-name]').value.trim();
       const claim = slot[side].querySelector('[data-my-claim]').value.trim();
@@ -103,10 +166,22 @@ export function mountLobby(root, ctx) {
       if (!name) return show('اكتب اسمك.');
       if (!claim) return show('اكتب دعواك.');
       show('');
-      try { apply(await api.setClaim(code, token, { name, claim })); }
-      catch (e) { show(e.message || 'تعذّر الحفظ.'); }
+      try {
+        const view = await api.setClaim(code, token, { name, claim });
+        editingClaim = false;
+        apply(view);
+      } catch (e) { show(e.message || 'تعذّر الحفظ.'); }
     });
   }
+
+  // Re-open the form prefilled to edit an existing claim (server un-readies
+  // the editor automatically — «re-confirm after editing»).
+  slot[mine].addEventListener('click', (e) => {
+    if (!e.target.closest('[data-edit-claim]') || !lastState) return;
+    editingClaim = true;
+    const me = lastState.debaters[mine];
+    mountMyForm(mine, { name: me.name, claim: me.claim });
+  });
 
   // --- format row: creator picks the round count; the other side sees it ----
   const ROUNDS_TEXT = { 1: 'جولة واحدة لكل طرف', 2: 'جولتان لكل طرف', 3: '٣ جولات لكل طرف' };
@@ -165,14 +240,17 @@ export function mountLobby(root, ctx) {
 
   function apply(state) {
     lastState = state;
-    root.querySelector('[data-topic]').textContent = state.topic;
+    renderTopicRow(state);
     renderFormat(state);
 
     // Opponent card: always refresh (no inputs there).
     slot[other].innerHTML = populatedCard(other, state.debaters[other]);
 
-    // My card: form until my claim is set, then a populated card (safe to refresh).
-    if (state.debaters[mine].claim) {
+    // My card: form until my claim is set, then a populated card (safe to
+    // refresh). An open edit form is never stomped by the poll.
+    if (editingClaim) {
+      /* keep the form as-is */
+    } else if (state.debaters[mine].claim) {
       myFormShown = false;
       slot[mine].innerHTML = populatedCard(mine, state.debaters[mine]);
     } else if (!myFormShown) {

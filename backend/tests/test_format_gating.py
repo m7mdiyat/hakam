@@ -54,6 +54,48 @@ def test_format_locked_once_debate_starts(client):
     assert res.status_code == 409
 
 
+def test_creator_edits_topic_and_ready_resets(client):
+    code, tok_a, tok_b = _setup_lobby(client)
+    client.post(f"/api/rooms/{code}/ready", json={"ready": True},
+                headers={"X-Debater-Token": tok_b})
+    view = _json(client.post(f"/api/rooms/{code}/topic",
+                             json={"topic": "موضوع جديد تمامًا"},
+                             headers={"X-Debater-Token": tok_a}))
+    assert view["topic"] == "موضوع جديد تمامًا"
+    # Topic change un-readies everyone (re-consent, like /format).
+    assert not view["debaters"]["a"]["ready"] and not view["debaters"]["b"]["ready"]
+
+
+def test_topic_forbidden_for_b_and_empty_rejected(client):
+    code, tok_a, tok_b = _setup_lobby(client)
+    res = client.post(f"/api/rooms/{code}/topic", json={"topic": "آخر"},
+                      headers={"X-Debater-Token": tok_b})
+    assert res.status_code == 403
+    res = client.post(f"/api/rooms/{code}/topic", json={"topic": "   "},
+                      headers={"X-Debater-Token": tok_a})
+    assert res.status_code == 400
+
+
+def test_topic_locked_once_debate_starts(client):
+    code, tok_a, _ = _room_in_debate(client)
+    res = client.post(f"/api/rooms/{code}/topic", json={"topic": "آخر"},
+                      headers={"X-Debater-Token": tok_a})
+    assert res.status_code == 409
+
+
+def test_claim_reedit_updates_and_unreadies(client):
+    # The lobby edit affordance leans on this: re-editing a claim pre-debate
+    # updates it and drops the editor's ready flag («re-confirm after editing»).
+    code, _, tok_b = _setup_lobby(client)
+    client.post(f"/api/rooms/{code}/ready", json={"ready": True},
+                headers={"X-Debater-Token": tok_b})
+    view = _json(client.post(f"/api/rooms/{code}/claim",
+                             json={"name": "سارة", "claim": "دعوى معدّلة"},
+                             headers={"X-Debater-Token": tok_b}))
+    assert view["debaters"]["b"]["claim"] == "دعوى معدّلة"
+    assert view["debaters"]["b"]["ready"] is False
+
+
 def test_one_round_debate_reaches_deliberating(client):
     code, tok_a, tok_b = _setup_lobby(client)
     client.post(f"/api/rooms/{code}/format", json={"rounds_per_side": 1},

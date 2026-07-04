@@ -173,6 +173,23 @@ def set_format(code):
     return _view(get_store().update(normalize_code(code), mut))
 
 
+@api.post("/rooms/<code>/topic")
+def set_topic(code):
+    """Creator (A) rewords the debate topic from the lobby, pre-debate only.
+    Resets both ready flags so the change is re-consented (like /format)."""
+    topic = _clean(_body().get("topic"), TOPIC_MAX, "الموضوع")
+    room = _load(code)
+    if _require_side(room) != "a":
+        raise ApiError(403, "not_creator", "منشئ الجلسة فقط يعدّل الموضوع.")
+
+    def mut(r: dict):
+        if r["state"] not in S.PRE_DEBATE:
+            raise ApiError(409, "already_started", "بدأت المناظرة؛ لا يمكن تعديل الموضوع.")
+        S.set_topic(r, topic, S.now_utc())
+
+    return _view(get_store().update(normalize_code(code), mut))
+
+
 @api.post("/rooms/<code>/turns/start")
 def start_turn(code):
     """The debater tapped the mic: start the server-stamped speaking clock.

@@ -156,6 +156,17 @@ def set_format(room: dict, rounds_per_side: int, now: Optional[datetime] = None)
     _touch(room, now, activity=True)
 
 
+def set_topic(room: dict, topic: str, now: Optional[datetime] = None) -> None:
+    """Creator rewords the debate topic in the lobby. Resets BOTH ready flags —
+    a claim written for one topic must not auto-carry consent to another.
+    Caller has validated pre-debate state and the text."""
+    now = now or now_utc()
+    room["topic"] = topic
+    for s in SIDES:
+        room["debaters"][s]["ready"] = False
+    _touch(room, now, activity=True)
+
+
 def _begin_turn_prep(room: dict, now: datetime) -> None:
     """A turn just became active: the speaking clock does NOT run yet — the
     debater gets a prep window to tap the mic (turns/start)."""

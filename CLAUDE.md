@@ -50,8 +50,9 @@ Rounds per side are **per-room (1–3, default 2)**, picked by the creator in th
 
 - `POST /api/rooms` `{topic}` → `{code, token}` (creator = debater A)
 - `POST /api/rooms/{code}/join` `{name, claim, consent: true}` → `{token}` (debater B; consent checkbox required)
-- `POST /api/rooms/{code}/claim` `{name, claim}` (A sets theirs)
+- `POST /api/rooms/{code}/claim` `{name, claim}` (A sets theirs; either side re-edits pre-debate — resets that side's ready flag)
 - `POST /api/rooms/{code}/format` `{rounds_per_side}` — creator only, pre-debate only; resets ready flags
+- `POST /api/rooms/{code}/topic` `{topic}` — creator only, pre-debate only; resets BOTH ready flags (a claim written for one topic must not auto-carry consent to another)
 - `POST /api/rooms/{code}/ready`
 - `POST /api/rooms/{code}/turns/start` — turn holder taps the mic; server stamps the speaking clock (idempotent)
 - `POST /api/rooms/{code}/turns` (multipart audio) — server validates turn, duration, and the speech gate
@@ -85,7 +86,7 @@ Each debater gets a random token at create/join, sent as `X-Debater-Token` heade
 ## Frontend screens (match /design exports exactly)
 
 1. Landing — wordmark الحَكَم (definite article, matches thehakam.com; keep the fatḥas — distinct from الحُكْم "verdict"), tagline «لتكن الحُجّة هي الفيصل», topic input, create CTA, join-by-code link
-2. Lobby — invite link + copy, two debater claim cards (teal/coral), **rounds selector** (creator-only segmented control 1–3, resets ready flags), ready gating
+2. Lobby — invite link + copy, two debater claim cards (teal/coral), **rounds selector** (creator-only segmented control 1–3, resets ready flags), ready gating; **inline editing pre-debate**: creator rewords the topic from the pill («تعديل»), each side re-edits their own claim card — both flows reset ready flags and never get stomped by the 2s poll while open
 3. Live debate — **debate topic pinned top-center** (sticky under the header on mobile, own grid row on desktop — never scrolls away), claim chips with a pulsing «غير متصل» presence badge when the opponent's client stops polling, circular countdown (full ring + prep countdown until the mic is tapped), **tap-to-toggle mic** (solid fill + sonar rings + stop-square glyph + live elapsed timer while recording; live waveform bars under the orb), live transcript feed, ordinal round labels («الجولة الأولى» — debaters are identified by name + color, never «أ/ب» on screen), turn progress dots, mutual finish request
 4. Deliberation — «الحَكَم يراجع الحجج»: the scale mark tilts like it's weighing, four step messages cycle (4.5s each), verdict interrupts instantly
 5. Verdict (v2) — hero (winner + درجة الحجاج chips + reasoning) → **تحليل الحجج** (per-debater argument cards: classification chips «استدلال قطعي/ترجيحي», verdict chips, playable quoted premises/conclusions, ghost «مقدمة غير منطوقة — استنتجها الحَكَم» never playable, rebuttal cross-links, «بقيت بلا ردّ» badges — these REPLACE the old نقاط بلا رد panel, «قدّم رأيًا بلا مقدمات تدعمه» banners) → **صحة القول** (fallacy cards with «ضمن حجته — اعرضها» scroll-links, تماسك الموقف receipt cards, «وقائع استند إليها القول… لا يفصل الحَكَم في صحتها») → **التقييم العام** collapsed (5-axis bars, emotionality meters, hand-built SVG pentagon radar — NOT Chart.js) → اللحظة الفاصلة → نصيحة الحَكَم → «النص الكامل للمناظرة» collapsible (per-turn playback + full text) → share + rematch. Every claim about a debater is playable in their own voice or explicitly marked as the judge's inference.
