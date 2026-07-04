@@ -5,6 +5,7 @@ import io
 
 import pytest
 
+from backend import config
 from backend.audio import ffmpeg_available
 
 from .conftest import make_tone
@@ -66,15 +67,17 @@ def test_turn_upload_transcodes_and_serves_m4a(client):
     assert res.data[4:8] == b"ftyp"
 
 
-def test_overlong_audio_rejected_by_real_duration(client):
+def test_overlong_audio_trimmed_to_turn_cap(client):
     code, token_a, _ = _room_in_debate(client)
-    # 135s > TURN_SECONDS(120) + grace(10): byte size passes, real duration must not.
-    res = _submit(client, code, token_a, make_tone(135.0, "webm"),
-                  "audio/webm", "turn.webm")
-    assert res.status_code == 400
-    assert res.get_json()["error"] == "audio_too_long"
-    # The turn was NOT consumed.
-    assert _json(client.get(f"/api/rooms/{code}"))["state"] == "turn_a1"
+    # 135s > TURN_SECONDS(120) + grace(10): the byte cap can't bound time, the
+    # transcode trim does. A take that ran long (throttled tab, late auto-stop)
+    # keeps its legitimate window instead of losing the whole turn.
+    view = _json(_submit(client, code, token_a, make_tone(135.0, "webm"),
+                         "audio/webm", "turn.webm"))
+    assert view["state"] == "turn_b1"
+    (turn,) = view["turns"]
+    cap = config.TURN_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS
+    assert turn["duration_s"] == pytest.approx(cap, abs=0.5)
 
 
 def test_unreadable_audio_rejected(client):

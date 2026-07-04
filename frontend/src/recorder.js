@@ -23,6 +23,57 @@ export function pickMime() {
   return '';
 }
 
+// --- shared mic stream -------------------------------------------------------
+// Acquired once and reused across every take of the debate, so the permission
+// prompt shows AT MOST ONCE: browsers with one-time grants (Chrome's «Allow
+// this time», Safari's per-session grant) re-prompt on the next getUserMedia
+// after the previous stream is fully stopped. Reuse also removes the
+// acquisition latency from every mic tap. Holding the stream open does NOT
+// lock the device — plain {audio:true} capture is OS-mixed, other applications
+// can use the mic at the same time. Tracks are disabled between takes, and the
+// debate screen calls releaseMic() on unmount so nothing lingers afterwards.
+let micStream = null;
+let micPending = null;   // single-flight: a double-tap must not double-prompt
+
+async function acquireMic() {
+  if (micStream && micStream.getTracks().some((t) => t.readyState === 'live')) {
+    return micStream;
+  }
+  micStream = null;
+  if (!micPending) {
+    micPending = navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        micStream = stream;
+        // The browser/OS can end the track behind our back (device unplugged,
+        // permission revoked, tab suspended): drop the cache so the next take
+        // re-acquires instead of recording a dead stream.
+        stream.getTracks().forEach((t) => {
+          t.addEventListener('ended', () => { if (micStream === stream) micStream = null; });
+        });
+        return stream;
+      })
+      .finally(() => { micPending = null; });
+  }
+  return micPending;
+}
+
+export function releaseMic() {
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  micStream = null;
+}
+
+// Pre-warm on debate mount WITHOUT ever prompting: only when the permission is
+// already granted (Permissions API), so the first tap starts instantly. Safari
+// doesn't support querying 'microphone' — it just skips the warm-up.
+export function warmMic() {
+  if (!isSupported() || !(navigator.permissions && navigator.permissions.query)) return;
+  try {
+    navigator.permissions.query({ name: 'microphone' })
+      .then((st) => { if (st.state === 'granted') acquireMic().catch(() => {}); })
+      .catch(() => { /* unsupported query name — never prompt from here */ });
+  } catch { /* ignore */ }
+}
+
 // Ignore accidental taps shorter than this.
 const MIN_MS = 400;
 
@@ -50,16 +101,17 @@ export class TurnRecorder {
     this._pending = true;
     this._abort = false;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.stream = await acquireMic();
     } catch (e) {
       this._pending = false;
       if (this.onError) this.onError(e);
       return;
     }
     this._pending = false;
+    this.stream.getAudioTracks().forEach((t) => { t.enabled = true; });
     if (this._abort) {
-      // Released before the mic was even acquired: never start an orphaned
-      // recording — release the stream and report a discard.
+      // Stopped before the mic was even acquired: never start an orphaned
+      // recording — re-disable the shared stream and report a discard.
       this._cleanup();
       this._discard(this._abortCanceled ? 'canceled' : 'too_short');
       return;
@@ -71,11 +123,40 @@ export class TurnRecorder {
     this.rec.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.rec.onstop = () => this._finish();
     this.startedAt = performance.now();
-    this.rec.start();
+    // Timesliced so chunks flush as we go: if the recorder dies mid-turn
+    // (phone call, revoked mic, suspended page) the take survives up to the
+    // interruption instead of collapsing to an empty blob.
+    this.rec.start(1000);
     this.recording = true;
     if (this.onStart) this.onStart();
     this._startMeter();
+    this._keepAwake();
     this._timer = setTimeout(() => this.stop(), this.maxMs);
+  }
+
+  // Re-arm the auto-stop against the SERVER clock. The local timer starts when
+  // getUserMedia resolves — after the server already stamped the deadline (and
+  // a first-time permission prompt can sit for many seconds) — so without a
+  // resync the recorder always overshoots the turn.
+  syncStop(msFromNow) {
+    if (!this.recording) return;
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => this.stop(), Math.max(0, msFromNow));
+  }
+
+  // A phone that auto-locks mid-turn suspends the page and kills the take.
+  // Screen wake lock while recording where supported; silently cosmetic elsewhere.
+  _keepAwake() {
+    if (!(navigator.wakeLock && navigator.wakeLock.request)) return;
+    const acquire = () => {
+      if (!this.recording || document.visibilityState !== 'visible') return;
+      navigator.wakeLock.request('screen')
+        .then((lock) => { this._wakeLock = lock; })
+        .catch(() => { /* denied/low battery — recording continues */ });
+    };
+    this._onVisible = acquire;   // the lock auto-releases on tab switch; re-acquire on return
+    document.addEventListener('visibilitychange', this._onVisible);
+    acquire();
   }
 
   // Live level meter on the SAME stream (no extra permission): AnalyserNode
@@ -123,6 +204,13 @@ export class TurnRecorder {
   }
 
   _finish() {
+    // The recorder can stop ITSELF (track died: phone call, OS interruption,
+    // device switch) — then onstop lands here without _end() having run. Kill
+    // the auto-stop timer and the recording flag NOW, or the timer later fires
+    // on this dead recorder and reports a phantom 'error' discard («تعذّر
+    // التسجيل») after the take was already delivered.
+    this.recording = false;
+    clearTimeout(this._timer);
     const durationMs = Math.round(performance.now() - this.startedAt);
     const type = (this.chunks[0] && this.chunks[0].type) || pickMime() || 'audio/webm';
     const blob = new Blob(this.chunks, { type });
@@ -140,7 +228,12 @@ export class TurnRecorder {
   _cleanup() {
     if (this._meter) { clearInterval(this._meter); this._meter = null; }
     if (this._audioCtx) { try { this._audioCtx.close(); } catch { /* ignore */ } this._audioCtx = null; }
-    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    if (this._onVisible) { document.removeEventListener('visibilitychange', this._onVisible); this._onVisible = null; }
+    if (this._wakeLock) { try { this._wakeLock.release(); } catch { /* ignore */ } this._wakeLock = null; }
+    // The stream is the debate-wide shared one (see acquireMic): disable its
+    // tracks between takes, never stop them — stopping would force the next
+    // take back through getUserMedia and, on one-time grants, a fresh prompt.
+    if (this.stream) this.stream.getAudioTracks().forEach((t) => { t.enabled = false; });
     this.stream = null;
   }
 }

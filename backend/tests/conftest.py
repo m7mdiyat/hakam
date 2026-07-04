@@ -33,6 +33,28 @@ def make_tone(seconds: float, fmt: str) -> bytes:
 
 
 @lru_cache(maxsize=None)
+def make_gapped_tone(pre_s: float, gap_s: float, post_s: float,
+                     tail_s: float = 0.0) -> bytes:
+    """Tone with a silent gap (and optional silent tail): pre_s of tone, gap_s
+    of silence, post_s of tone, tail_s of silence — for silence-interval and
+    speech-end assertions."""
+    total = pre_s + gap_s + post_s + tail_s
+    mute = f"volume=0:enable='between(t,{pre_s},{pre_s + gap_s})'"
+    if tail_s:
+        mute += f",volume=0:enable='gte(t,{pre_s + gap_s + post_s})'"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "gapped.webm")
+        subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"sine=frequency=440:duration={total}",
+             "-af", mute, "-c:a", "libopus", out],
+            check=True, capture_output=True, timeout=120,
+        )
+        with open(out, "rb") as f:
+            return f.read()
+
+
+@lru_cache(maxsize=None)
 def make_silence(seconds: float) -> bytes:
     """A dead-mic capture: digital silence in webm/opus (the EY52EC scenario)."""
     with tempfile.TemporaryDirectory() as tmp:

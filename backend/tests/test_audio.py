@@ -36,6 +36,27 @@ def test_silent_capture_measures_dead(silence=None):
     assert stats["speech_end_s"] < 0.5    # no speech anywhere
 
 
+def test_silence_intervals_detected_without_moving_speech_end():
+    from .conftest import make_gapped_tone
+    # 2s tone, 1s gap, 2s tone: the gap is a snappable boundary, but at 1s it is
+    # SHORTER than the 1.5s speech-end detector — speech_end must stay at EOF
+    # (the transcription coverage check was calibrated against that).
+    _, duration, stats = transcode_to_m4a(make_gapped_tone(2.0, 1.0, 2.0), "audio/webm")
+    assert stats["speech_end_s"] == pytest.approx(duration, abs=0.5)
+    gaps = [iv for iv in stats["silences"] if iv[0] == pytest.approx(2.0, abs=0.4)]
+    assert gaps and gaps[0][1] == pytest.approx(3.0, abs=0.4)
+
+
+def test_trailing_silence_still_sets_speech_end():
+    from .conftest import make_gapped_tone
+    # 2s tone, 0.5s gap, 2s tone, 2s trailing silence (≥1.5s): speech_end lands
+    # at the trailing-silence onset, and both quiet intervals are captured.
+    _, _, stats = transcode_to_m4a(make_gapped_tone(2.0, 0.5, 2.0, tail_s=2.0),
+                                   "audio/webm")
+    assert stats["speech_end_s"] == pytest.approx(4.5, abs=0.5)
+    assert len(stats["silences"]) >= 2
+
+
 def test_garbage_raises_transcode_error():
     with pytest.raises(TranscodeError):
         transcode_to_m4a(b"definitely not audio", "audio/webm")

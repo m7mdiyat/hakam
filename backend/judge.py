@@ -42,9 +42,18 @@ from .store import get_store
 
 log = logging.getLogger("hakam.judge")
 
-# Audio-proof padding (bias early — starting late is what breaks trust).
-PREROLL_S = 1.5
-POSTROLL_S = 1.0
+# Audio-proof timing. Transcript timestamps are model output at whole-second
+# MM:SS granularity (± drift on top) — never precise enough to cut a quote on.
+# Anchors therefore snap to the MEASURED speech boundaries from upload-time
+# silencedetect (audio_stats.silences): a quote should start at the speech
+# onset after a pause and end at the speech offset before one.
+SNAP_WINDOW_S = 1.2       # how far a model timestamp may be pulled to a boundary
+PREROLL_S = 0.25          # after snapping: pads sit INSIDE the adjacent pause
+POSTROLL_S = 0.35
+UNSNAPPED_PREROLL_S = 0.8   # no boundary found near the model time (continuous
+UNSNAPPED_POSTROLL_S = 0.8  # speech): pad wider — bias early, late starts break trust
+LEGACY_PREROLL_S = 1.5    # no silence data at all (turns uploaded pre-snapping)
+LEGACY_POSTROLL_S = 1.0
 
 # Tier thresholds on the درجة الحجاج scale (Gate-3 priors).
 MARGIN_FORCED_CLOSE = 3.0
@@ -532,8 +541,27 @@ def _axes_lean(axes_scores: dict) -> Optional[str]:
     return "a" if tot["a"] > tot["b"] else "b"
 
 
+def _snap_to_boundary(t: float, silences: list, edge: str) -> "tuple[float, bool]":
+    """(snapped time, whether a measured boundary was found).
+
+    edge='start' wants a speech ONSET (the end of a quiet interval); edge='end'
+    wants a speech OFFSET (the start of one). A model time landing INSIDE a
+    pause is clamped to that pause's speech-side edge outright — the quoted
+    words cannot live in silence.
+    """
+    best = None
+    for s, e in silences or []:
+        if s <= t <= e:
+            return (e, True) if edge == "start" else (s, True)
+        cand = e if edge == "start" else s
+        if abs(cand - t) <= SNAP_WINDOW_S and (best is None or abs(cand - t) < abs(best - t)):
+            best = cand
+    return (best, True) if best is not None else (t, False)
+
+
 def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
-    """Padded playback window for validated segment ids (single turn)."""
+    """Playback window for validated segment ids (single turn), snapped to the
+    measured speech boundaries so the quote starts exactly where the words do."""
     if not segment_ids:
         return None
     tid = segment_ids[0].split("-")[0]
@@ -545,9 +573,24 @@ def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
     if not segs:
         return None
     duration = info["entry"].get("duration_s") or segs[-1]["end_s"]
+    raw_start = min(s["start_s"] for s in segs)
+    raw_end = max(s["end_s"] for s in segs)
+
+    silences = (info["entry"].get("audio_stats") or {}).get("silences")
+    if silences is None:  # pre-snapping upload: coarse times, keep wide pads
+        start, end = raw_start - LEGACY_PREROLL_S, raw_end + LEGACY_POSTROLL_S
+    else:
+        start, s_hit = _snap_to_boundary(raw_start, silences, "start")
+        end, e_hit = _snap_to_boundary(raw_end, silences, "end")
+        if end - start < 0.4:  # snapped into a sliver/inversion — trust raw span
+            start, end = raw_start, raw_end
+            s_hit = e_hit = False
+        start -= PREROLL_S if s_hit else UNSNAPPED_PREROLL_S
+        end += POSTROLL_S if e_hit else UNSNAPPED_POSTROLL_S
+
     return {"turn": info["entry"]["turn"],
-            "start_s": round(max(0.0, min(s["start_s"] for s in segs) - PREROLL_S), 2),
-            "end_s": round(min(duration, max(s["end_s"] for s in segs) + POSTROLL_S), 2)}
+            "start_s": round(max(0.0, start), 2),
+            "end_s": round(min(duration, max(end, start + 0.5)), 2)}
 
 
 def _emotionality(axes_scores: dict, fallacies: list) -> dict:

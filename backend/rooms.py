@@ -250,14 +250,16 @@ def submit_turn(code):
     from .audio import TranscodeError, ffmpeg_available, transcode_to_m4a
     m4a_data, duration_s, audio_stats = None, None, None
     if ffmpeg_available():
+        # The byte cap can't bound time (opus bitrate varies); the transcode
+        # trim can. The UI stops at TURN_SECONDS; a take that ran long anyway
+        # (throttled tab, suspended phone) keeps its legitimate window instead
+        # of losing the whole turn — everything past the cap is cut.
+        cap_s = float(config.TURN_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS)
         try:
-            m4a_data, duration_s, audio_stats = transcode_to_m4a(data, content_type)
+            m4a_data, duration_s, audio_stats = transcode_to_m4a(
+                data, content_type, max_duration_s=cap_s)
         except TranscodeError:
             raise ApiError(400, "bad_audio", "تعذّرت قراءة التسجيل الصوتي.")
-        # The byte cap can't bound time (opus bitrate varies); the probed
-        # duration can. UI stops at TURN_SECONDS; small grace for stop lag.
-        if duration_s > config.TURN_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS:
-            raise ApiError(400, "audio_too_long", "التسجيل أطول من مدة الجولة.")
         # SPEECH GATE: a silent capture (dead mic) is rejected before it can
         # reach storage, Gemini, or the judge — silent audio + a topic makes
         # the model fabricate a transcript, and a fabricated transcript gets

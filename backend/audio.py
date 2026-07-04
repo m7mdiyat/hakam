@@ -78,19 +78,30 @@ _VOL_RE = re.compile(r"(mean|max)_volume:\s*(-?[\d.]+)\s*dB")
 _SIL_RE = re.compile(r"silence_(start|end):\s*(-?[\d.]+)")
 
 
+# silencedetect gates: intervals ≥ SILENCE_MIN_S feed the audio-proof boundary
+# snapping (a sentence pause is ~0.3–0.8s); speech_end_s keeps its original
+# semantics by considering only intervals ≥ SPEECH_END_MIN_SILENCE_S (the
+# transcription coverage check was calibrated against that — do not tighten it).
+SILENCE_MIN_S = 0.3
+SPEECH_END_MIN_SILENCE_S = 1.5
+
+
 def analyze_audio(path: Path, duration_s: float) -> dict:
-    """One ffmpeg pass -> {max_db, mean_db, speech_end_s}.
+    """One ffmpeg pass -> {max_db, mean_db, speech_end_s, silences}.
 
     max_db is the speech gate's input: a dead mic capture measures around
     -91 dB while even whispered speech peaks far above -50 dB (forensics from
     real debates: silent turns -91, quietest real turn -6). speech_end_s is
     where audible content actually stops — the transcription coverage check
     compares the transcript's end against it, so a model that stops
-    transcribing mid-speech gets caught.
+    transcribing mid-speech gets caught. silences is the list of [start, end]
+    quiet intervals (≥ SILENCE_MIN_S): the measured word boundaries that
+    audio-proof anchors snap to (model timestamps are whole-second MM:SS).
     """
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-i", str(path),
-         "-af", "volumedetect,silencedetect=n=-40dB:d=1.5", "-f", "null", "-"],
+         "-af", f"volumedetect,silencedetect=n=-40dB:d={SILENCE_MIN_S}",
+         "-f", "null", "-"],
         capture_output=True, timeout=TRANSCODE_TIMEOUT_S, text=True,
     )
     out = proc.stderr or ""
@@ -107,19 +118,31 @@ def analyze_audio(path: Path, duration_s: float) -> dict:
             open_start = None
     if open_start is not None:
         silences.append((open_start, duration_s))
-    # Speech ends where a final silence interval reaching EOF begins.
+    # Speech ends where a final LONG silence reaching EOF begins. Filtering by
+    # length reproduces the original d=1.5 detector exactly (silencedetect
+    # reports maximal quiet runs; d only filters them by duration).
     speech_end = duration_s
-    if silences and silences[-1][1] >= duration_s - 0.5:
-        speech_end = silences[-1][0]
+    long_silences = [iv for iv in silences
+                     if iv[1] - iv[0] >= SPEECH_END_MIN_SILENCE_S]
+    if long_silences and long_silences[-1][1] >= duration_s - 0.5:
+        speech_end = long_silences[-1][0]
     return {
         "max_db": vols.get("max", 0.0),
         "mean_db": vols.get("mean", 0.0),
         "speech_end_s": round(max(0.0, min(speech_end, duration_s)), 2),
+        "silences": [[round(s, 2), round(e, 2)] for s, e in silences],
     }
 
 
-def transcode_to_m4a(data: bytes, content_type: str) -> "tuple[bytes, float, dict]":
+def transcode_to_m4a(data: bytes, content_type: str,
+                     max_duration_s: "Optional[float]" = None
+                     ) -> "tuple[bytes, float, dict]":
     """Original upload bytes -> (canonical m4a bytes, duration s, audio stats).
+
+    `max_duration_s` trims the canonical rendition (ffmpeg -t): a recorder whose
+    auto-stop fired late (throttled tab, suspended phone) must not lose the whole
+    take — the first max_duration_s seconds ARE the legitimate speaking window,
+    so we keep them and drop only the overrun. The stored original stays untouched.
 
     Raises TranscodeError if the input is unreadable — callers treat that as a
     bad upload, not a server error.
@@ -128,8 +151,9 @@ def transcode_to_m4a(data: bytes, content_type: str) -> "tuple[bytes, float, dic
         src = Path(tmp) / f"in.{ext_for(content_type)}"
         dst = Path(tmp) / "out.m4a"
         src.write_bytes(data)
+        trim = ["-t", str(float(max_duration_s))] if max_duration_s else []
         _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-              "-i", str(src), *_FFMPEG_ARGS, str(dst)])
+              "-i", str(src), *_FFMPEG_ARGS, *trim, str(dst)])
         m4a = dst.read_bytes()
         if not m4a:
             raise TranscodeError("ffmpeg produced empty output")

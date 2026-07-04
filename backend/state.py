@@ -306,12 +306,20 @@ def reconcile(room: dict, now: Optional[datetime] = None) -> bool:
 
     # No-show forfeits (bounded loop). Two clocks can expire a turn: the prep
     # window (never tapped the mic) or the speaking deadline (started, never
-    # submitted).
+    # submitted). A STARTED turn only forfeits after the submit window has
+    # fully closed (deadline + SUBMIT_GRACE): a debater who spoke to the buzzer
+    # necessarily uploads after the deadline, and this reconcile runs on every
+    # poll from EITHER side — forfeiting inside the submit window would kill a
+    # legitimate upload mid-flight.
     for _ in range(len(room["turn_order"]) + 1):
         if not is_turn_state(room["state"]):
             break
-        deadline = room["turn_deadline_at"] or room["turn_prep_deadline_at"]
-        if not deadline:
+        if room["turn_deadline_at"]:
+            deadline = room["turn_deadline_at"] + timedelta(
+                seconds=config.SUBMIT_GRACE_SECONDS)
+        elif room["turn_prep_deadline_at"]:
+            deadline = room["turn_prep_deadline_at"]
+        else:
             break
         overdue = now > deadline + timedelta(seconds=config.NOSHOW_GRACE_SECONDS)
         if overdue and not has_submission(room, current_turn(room)):

@@ -3,7 +3,7 @@ import { mic as micIcon, ring, CIRC, play as playIcon, stop as stopIcon } from '
 import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
 import { toast } from '../components.js';
-import { TurnRecorder, isSupported } from '../recorder.js';
+import { TurnRecorder, isSupported, warmMic, releaseMic } from '../recorder.js';
 
 const TEAL = 'var(--teal)';
 const CORAL = 'var(--coral)';
@@ -175,6 +175,19 @@ export function mountDebate(root, ctx) {
     else { micBtn.disabled = true; setMic('waiting'); }
   }
 
+  // Start the server speaking clock, once. Idempotent server-side, so the
+  // poll-driven self-heal in apply() can re-fire it if the first attempt was
+  // lost — otherwise the server stays in the prep window and forfeits the turn
+  // WHILE the debater is happily recording.
+  let startReqInFlight = false;
+  function ensureTurnStarted() {
+    if (startReqInFlight) return;
+    startReqInFlight = true;
+    api.startTurn(code, token).then(apply)
+      .catch(() => { /* apply() retries on the next poll */ })
+      .finally(() => { startReqInFlight = false; });
+  }
+
   function startRec() {
     if (recording || uploading || !myTurn()) return;
     // The speaking clock starts at the first mic tap (server-stamped). A later
@@ -184,14 +197,20 @@ export function mountDebate(root, ctx) {
     if (rem <= 400) { toast('انتهى وقت الجولة'); return; }
     recording = true;
     setMic('recording');
-    if (!started) api.startTurn(code, token).then(apply).catch(() => { /* poll corrects */ });
+    if (!started) ensureTurnStarted();
     rec = new TurnRecorder({
       maxMs: rem,
       onStart: () => { if (recording) startRecTick(); },
       onStop: onRecorded,
       onDiscard: onDiscarded,
       onLevel: drawLevel,
-      onError: () => { recording = false; refreshMic(); toast('تعذّر الوصول للميكروفون'); },
+      onError: (e) => {
+        recording = false;
+        refreshMic();
+        toast(e && e.name === 'NotAllowedError'
+          ? 'الوصول للميكروفون مرفوض — فعّله من إعدادات المتصفح لهذا الموقع'
+          : 'تعذّر الوصول للميكروفون');
+      },
     });
     rec.start();
   }
@@ -229,13 +248,28 @@ export function mountDebate(root, ctx) {
   }
   function stopRec() { if (recording && rec) rec.stop(); }
 
+  // A transient network blip must not destroy a whole spoken turn: retry the
+  // upload. 4xx responses are verdicts (expired / rejected audio), not blips —
+  // those surface immediately. The server's submit grace absorbs the backoff.
+  async function submitWithRetry(blob, durationMs, tries = 3) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await api.submitTurn(code, token, blob, durationMs);
+      } catch (e) {
+        const transient = !e.status || e.status >= 500;
+        if (!transient || attempt >= tries) throw e;
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
+  }
+
   async function onRecorded(blob, durationMs) {
     recording = false;
     uploading = true;
     setMic('uploading');
     micBtn.disabled = true;
     try {
-      apply(await api.submitTurn(code, token, blob, durationMs));
+      apply(await submitWithRetry(blob, durationMs));
     } catch (e) {
       toast(e.message || 'تعذّر إرسال التسجيل');
     } finally {
@@ -384,6 +418,24 @@ export function mountDebate(root, ctx) {
       restartTimer();
     }
 
+    // Keep a live recording glued to the SERVER clock (anchor was just updated):
+    // - clock running -> re-arm the auto-stop from the authoritative remaining
+    //   time (the local timer started late by the getUserMedia delay);
+    // - clock NOT running -> our turns/start was lost; re-fire it (idempotent)
+    //   before the prep window forfeits a turn someone is actually speaking;
+    // - turn no longer ours -> it forfeited/advanced; stop recording into it.
+    if (recording && rec) {
+      const ct = state.current_turn;
+      if (ct && sideOf(ct) === mine) {
+        if (state.turn_started) rec.syncStop(remainingMs());
+        else ensureTurnStarted();
+      } else {
+        recording = false;   // now, not in onDiscard: the next poll must not re-cancel/re-toast
+        rec.cancel();
+        toast('انتهى وقت الجولة — لم يُرسل التسجيل');
+      }
+    }
+
     renderDots(state);
     renderTurns(state);
     refreshMic();
@@ -399,12 +451,17 @@ export function mountDebate(root, ctx) {
     finishHint.classList.toggle('hint-active', otherAsked && !iAsked);
   }
 
+  // If the mic permission is already granted, open the shared stream now so the
+  // first tap records instantly (and the debate never re-prompts). Never prompts.
+  warmMic();
+
   return {
     update: apply,
     unmount() {
       if (raf) cancelAnimationFrame(raf);
       stopRecTick();
       if (recording && rec) rec.cancel();
+      releaseMic();   // debate over (or navigated away): let go of the device
       try { audioEl.pause(); } catch { /* ignore */ }
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
     },

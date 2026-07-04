@@ -48,8 +48,17 @@ PREP_SECONDS = _int("HAKAM_PREP_SECONDS", 120)
 
 # --- Timer / lifecycle grace values -----------------------------------------
 # Hard server cap: a turn upload is rejected after deadline + this many seconds.
-SUBMIT_GRACE_SECONDS = _int("HAKAM_SUBMIT_GRACE_SECONDS", 3)
-# A turn with NO recording auto-forfeits (advances) at deadline + this many seconds.
+# This bounds upload LATENESS only, never content length (the ffprobe trim in
+# audio.py bounds that) — a full-length take physically cannot start uploading
+# until the deadline has passed, so this must absorb mic-permission delay +
+# a slow mobile upload of a ~2 MB blob. 3s here silently killed every
+# spoke-to-the-buzzer turn.
+SUBMIT_GRACE_SECONDS = _int("HAKAM_SUBMIT_GRACE_SECONDS", 45)
+# Extra slack past the relevant window before a turn with NO recording
+# auto-forfeits: prep window + this (never tapped the mic), or speaking
+# deadline + SUBMIT_GRACE + this (started, never submitted) — the forfeit must
+# fire strictly AFTER the last acceptable submit, or either side's 2s poll
+# forfeits a turn whose upload is still in flight.
 NOSHOW_GRACE_SECONDS = _int("HAKAM_NOSHOW_GRACE_SECONDS", 10)
 # Non-terminal room with no activity for this long -> abandoned.
 ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
