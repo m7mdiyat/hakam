@@ -57,6 +57,7 @@ export function mountDebate(root, ctx) {
     </div>`;
 
   const $ = (s) => root.querySelector(s);
+  const ringWrap = root.querySelector('.ring-wrap');
   const clockEl = $('[data-clock]');
   const totalEl = $('[data-total]');
   const ringEl = root.querySelector('.ring-progress');
@@ -111,7 +112,7 @@ export function mountDebate(root, ctx) {
 
   function myTurn() {
     const ct = lastState && lastState.current_turn;
-    return !!ct && sideOf(ct) === mine && !uploading;
+    return !!ct && sideOf(ct) === mine && !uploading && !lastState.processing;
   }
 
   // Live elapsed counter while recording (started by TurnRecorder.onStart, i.e.
@@ -145,6 +146,10 @@ export function mountDebate(root, ctx) {
       micGlyph.innerHTML = micIcon(34, sideColor(mine), 1.8);
       micLabel.textContent = 'جارٍ الإرسال…';
       micLabel.style.color = 'var(--muted)';
+    } else if (kind === 'hold') {
+      micGlyph.innerHTML = micIcon(34, 'var(--muted-2)', 1.8);
+      micLabel.textContent = 'يدوّن الحَكَم الجولة السابقة…';
+      micLabel.style.color = 'var(--muted)';
     } else if (kind === 'waiting') {
       const other = mine === 'a' ? 'b' : 'a';
       const name = lastState ? lastState.debaters[activeSide()].name : '';
@@ -171,7 +176,8 @@ export function mountDebate(root, ctx) {
       micLabel.style.color = 'var(--muted)';
       return;
     }
-    if (myTurn()) { micBtn.disabled = false; setMic('idle'); }
+    if (lastState && lastState.processing) { micBtn.disabled = true; setMic('hold'); }
+    else if (myTurn()) { micBtn.disabled = false; setMic('idle'); }
     else { micBtn.disabled = true; setMic('waiting'); }
   }
 
@@ -263,11 +269,26 @@ export function mountDebate(root, ctx) {
     }
   }
 
+  // The take is on its way: stop the countdown NOW rather than at the next
+  // poll — the debater already spoke; watching the ring keep draining during
+  // the upload reads as time being stolen. If the submit fails, the next
+  // poll's apply() restores the real clock.
+  function showSubmitHold() {
+    anchor = null;
+    prep = null;
+    clockEl.textContent = '—';
+    if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');
+    ringWrap.classList.add('ring-hold');
+    turnLabel.textContent = 'جارٍ إرسال التسجيل…';
+    turnLabel.style.color = 'var(--muted)';
+  }
+
   async function onRecorded(blob, durationMs) {
     recording = false;
     uploading = true;
     setMic('uploading');
     micBtn.disabled = true;
+    showSubmitHold();
     try {
       apply(await submitWithRetry(blob, durationMs));
     } catch (e) {
@@ -392,7 +413,18 @@ export function mountDebate(root, ctx) {
       const nm = state.debaters[side].name || '';
       if (ringEl) ringEl.setAttribute('stroke', col);
       turnLabel.style.color = col;
-      if (state.turn_deadline_at) {
+      if (state.processing) {
+        // Between turns: the previous turn's transcript is being produced.
+        // No clock runs against anyone — full ring, pulsing, no countdown.
+        anchor = null;
+        prep = null;
+        clockEl.textContent = '—';
+        if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');
+        ringWrap.classList.add('ring-hold');
+        turnLabel.textContent = 'يدوّن الحَكَم الجولة…';
+        turnLabel.style.color = 'var(--muted)';
+      } else if (state.turn_deadline_at) {
+        ringWrap.classList.remove('ring-hold');
         anchor = {
           deadline: Date.parse(state.turn_deadline_at),
           serverNow: Date.parse(state.server_now),
@@ -403,6 +435,7 @@ export function mountDebate(root, ctx) {
         turnLabel.textContent = `دور ${nm} — ${roundLabel(roundOf(state.current_turn))}`;
       } else {
         // Turn not started: full ring, full clock, prep countdown in the label.
+        ringWrap.classList.remove('ring-hold');
         anchor = null;
         clockEl.textContent = fmtClock(secs * 1000);
         if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');

@@ -109,6 +109,9 @@ def _write_transcript(code: str, turn_key: str, transcript: dict) -> None:
                 existing = t.get("transcript") or {}
                 transcript["attempts"] = int(existing.get("attempts", 0)) + 1
                 t["transcript"] = transcript
+                # ok or failed, the wait is over either way: if the next
+                # turn's prep window is held on this transcript, open it.
+                S.release_processing_hold(room, turn_key)
                 return
         raise LookupError(f"turn {turn_key} not found in room {code}")
 

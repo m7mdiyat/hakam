@@ -203,6 +203,8 @@ def start_turn(code):
             raise ApiError(409, "not_active", "لا توجد جولة نشطة الآن.")
         if S.side_of_turn(ct) != side:
             raise ApiError(409, "not_your_turn", "ليس دورك الآن.")
+        if S.is_processing(r):
+            raise ApiError(409, "processing", "بانتظار اكتمال تدوين الجولة السابقة.")
         S.start_turn(r, S.now_utc())
 
     return _view(get_store().update(normalize_code(code), mut))
@@ -362,6 +364,40 @@ def judge_room(code):
     room = _load(code)
     _require_side(room)
     return _view(_maybe_judge(room))
+
+
+@api.post("/rooms/<code>/rematch")
+def rematch(code):
+    """Creator restarts the debate with the same opponent: a linked fresh room
+    with both seats, topic, format and tokens carried over (state.rematch_room).
+    The old room's public view then exposes rematch_code, so the opponent's
+    polling client follows automatically — reused tokens mean no secret needs
+    delivering. Idempotent: one rematch per room, later calls return it."""
+    room = _load(code)
+    if _require_side(room) != "a":
+        raise ApiError(403, "not_creator", "منشئ الجلسة فقط يبدأ الإعادة.")
+    if not room.get("verdict"):
+        raise ApiError(409, "no_verdict", "الإعادة متاحة بعد صدور الحُكْم.")
+    if room.get("rematch"):
+        return jsonify({"code": room["rematch"]["code"]})
+
+    for _ in range(8):
+        new_code = gen_code()
+        try:
+            get_store().create(S.rematch_room(room, new_code))
+        except AlreadyExists:
+            continue
+
+        def mut(r: dict):
+            # Two racing creator clicks: first link wins; the loser's fresh
+            # room is never referenced and simply expires with its TTL.
+            if not r.get("rematch"):
+                r["rematch"] = {"code": new_code, "at": S.now_utc()}
+                S._touch(r, S.now_utc(), activity=True)
+
+        room = get_store().update(normalize_code(code), mut)
+        return jsonify({"code": room["rematch"]["code"]})
+    raise ApiError(503, "code_exhausted", "تعذّر إنشاء رمز. حاول مجددًا.")
 
 
 @api.post("/internal/transcribe")

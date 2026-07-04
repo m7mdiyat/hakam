@@ -420,7 +420,7 @@ export function verdictHtml(state) {
       ${transcriptPanelHtml(state)}
       <div class="verdict-actions">
         <button class="btn btn-gold" data-share type="button">شارك الحُكْم</button>
-        <button class="btn btn-ghost" data-rematch type="button">مناظرة جديدة بنفس الموضوع</button>
+        <button class="btn btn-ghost" data-rematch type="button">أعد المناظرة مع نفس الخصم</button>
         <button class="linklike" data-new type="button">موضوع جديد</button>
       </div>
     </div>`;
@@ -473,6 +473,16 @@ export function mountVerdict(root, ctx) {
   let player = null;
   let delibTimer = null;
   let delibIdx = 0;
+  let followedRematch = false;
+
+  // Move to the rematch room. Tokens carry over server-side, so each client
+  // keeps its own seat: same token, same side, new code.
+  function goRematch(newCode) {
+    if (followedRematch) return;
+    followedRematch = true;
+    creds.set(newCode, token, ctx.creds.side);
+    ctx.navigate(`/r/${newCode}`);
+  }
 
   function stopDelibCycle() {
     if (delibTimer) { clearInterval(delibTimer); delibTimer = null; }
@@ -542,12 +552,17 @@ export function mountVerdict(root, ctx) {
       } catch { /* share sheet dismissed */ }
     });
     root.querySelector('[data-rematch]').addEventListener('click', async (e) => {
+      // Creator only: the server links a fresh room (same seats, same tokens)
+      // and the opponent's poll follows rematch_code automatically.
+      if (ctx.creds.side !== 'a') {
+        toast('منشئ الجلسة فقط يبدأ الإعادة — ستنتقل تلقائيًا حين يبدأها');
+        return;
+      }
       e.target.disabled = true;
       try {
-        const { code: newCode, token: t, side } = await api.createRoom(state.topic);
-        creds.set(newCode, t, side);
-        ctx.navigate(`/r/${newCode}`);
-      } catch (err) { e.target.disabled = false; toast(err.message || 'تعذّر إنشاء الجلسة'); }
+        const { code: newCode } = await api.rematch(code, token);
+        goRematch(newCode);
+      } catch (err) { e.target.disabled = false; toast(err.message || 'تعذّر بدء الإعادة'); }
     });
     root.querySelector('[data-new]').addEventListener('click', () => {
       creds.clear(code);
@@ -567,6 +582,13 @@ export function mountVerdict(root, ctx) {
 
   return {
     update(state) {
+      // The creator started a rematch: both clients follow it (the creator
+      // already navigated from the click; this catches the opponent's poll).
+      if (state.rematch_code && !followedRematch) {
+        toast('مناظرة جديدة مع نفس الخصم — جارٍ الانتقال…');
+        goRematch(state.rematch_code);
+        return;
+      }
       if (state.verdict) {
         // The verdict interrupts the deliberation loop immediately.
         if (mode !== 'verdict') { mode = 'verdict'; stopDelibCycle(); renderVerdict(state); }

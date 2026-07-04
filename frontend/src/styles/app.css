@@ -267,6 +267,14 @@ button { font-family: inherit; }
 .ring-wrap { position: relative; width: 196px; height: 196px; }
 .ring { display: block; }
 .ring-progress { transition: stroke 0.3s; }
+/* Processing hold: no clock runs while a turn's transcript is produced —
+   the full ring breathes instead of draining. */
+.ring-hold .ring-progress { animation: ring-breathe 1.8s ease-in-out infinite; }
+.ring-hold .clock { color: var(--muted); }
+@keyframes ring-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 .ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .clock { font-size: 46px; font-weight: 600; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
 .turn-label { font-size: 14px; font-weight: 500; text-align: center; }

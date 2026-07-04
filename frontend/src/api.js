@@ -68,6 +68,11 @@ export const api = {
   judge: (code, token) =>
     fetch(`${API}/rooms/${code}/judge`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
 
+  // Creator restarts the debate with the same opponent (verdict screen).
+  // The opponent's client follows the old room's rematch_code from the poll.
+  rematch: (code, token) =>
+    fetch(`${API}/rooms/${code}/rematch`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
+
   submitTurn: (code, token, blob, durationMs) => {
     const fd = new FormData();
     const ext = (blob.type.split('/')[1] || 'webm').split(';')[0];

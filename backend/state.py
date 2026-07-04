@@ -74,6 +74,7 @@ def new_room(code: str, topic: str, token_a: str) -> dict:
         "turn_index": 0,
         "turn_deadline_at": None,       # speaking clock; set when the mic starts
         "turn_prep_deadline_at": None,  # start-your-mic-by; set when a turn begins
+        "processing_since": None,       # both clocks off: waiting on a transcript
         "turns": [],
         "finish_requested": {"a": False, "b": False},
         "verdict": None,  # Phase 2
@@ -167,11 +168,43 @@ def set_topic(room: dict, topic: str, now: Optional[datetime] = None) -> None:
     _touch(room, now, activity=True)
 
 
+def is_processing(room: dict) -> bool:
+    """Between turns: the previous turn's transcript is still being produced,
+    so the next turn's prep window hasn't opened and no clock runs."""
+    return (is_turn_state(room["state"])
+            and room.get("processing_since") is not None
+            and room["turn_deadline_at"] is None
+            and room.get("turn_prep_deadline_at") is None)
+
+
+def rematch_room(old: dict, new_code: str, now: Optional[datetime] = None) -> dict:
+    """Fresh room for the SAME two debaters (verdict-screen rematch): topic,
+    format, names, claims and tokens carry over; turns/verdict/clocks are fresh.
+    Tokens are reused deliberately — same two holders, same capability
+    boundary — so the opponent's client can follow the old room's rematch_code
+    without any secret-delivery channel. Both sides must re-ready before
+    anything records; that is the re-consent gate."""
+    now = now or now_utc()
+    room = new_room(new_code, old["topic"], old["secret_tokens"]["a"])
+    room["format"] = dict(old["format"])
+    room["turn_order"] = build_turn_order(old["format"]["rounds_per_side"])
+    room["secret_tokens"]["b"] = old["secret_tokens"]["b"]
+    for s in SIDES:
+        d = old["debaters"][s]
+        room["debaters"][s].update({
+            "name": d["name"], "claim": d["claim"], "consent": d["consent"],
+            "joined_at": now, "last_seen_at": None,   # presence unknown = online
+        })
+    room["state"] = CLAIMS
+    return room
+
+
 def _begin_turn_prep(room: dict, now: datetime) -> None:
     """A turn just became active: the speaking clock does NOT run yet — the
     debater gets a prep window to tap the mic (turns/start)."""
     room["turn_deadline_at"] = None
     room["turn_prep_deadline_at"] = now + timedelta(seconds=config.PREP_SECONDS)
+    room["processing_since"] = None
 
 
 def start_debate(room: dict, now: Optional[datetime] = None) -> None:
@@ -237,6 +270,26 @@ def record_turn(room: dict, side: str, audio_uri: str, duration_ms: int,
     })
     _touch(room, now, activity=True)
     advance_turn(room, now)
+    if transcribe_pending and is_turn_state(room["state"]):
+        # Processing hold: the next turn's prep window opens when this turn's
+        # transcript lands (release_processing_hold) or at the reconcile cap —
+        # the opponent replies to a transcribed turn, and no clock runs
+        # against anyone while the transcription worker is busy.
+        room["turn_prep_deadline_at"] = None
+        room["processing_since"] = now
+
+
+def release_processing_hold(room: dict, turn_key: str, now: Optional[datetime] = None) -> None:
+    """The transcript for `turn_key` reached a terminal status (ok or failed —
+    the wait is over either way): if the next turn's prep is held on it, open
+    the prep window now. The hold is only ever on the LAST recorded turn."""
+    if not is_processing(room):
+        return
+    if not room["turns"] or room["turns"][-1]["turn"] != turn_key:
+        return
+    now = now or now_utc()
+    _begin_turn_prep(room, now)
+    _touch(room, now)
 
 
 def _forfeit_current_turn(room: dict, now: datetime) -> None:
@@ -330,6 +383,15 @@ def reconcile(room: dict, now: Optional[datetime] = None) -> bool:
                 seconds=config.SUBMIT_GRACE_SECONDS)
         elif room["turn_prep_deadline_at"]:
             deadline = room["turn_prep_deadline_at"]
+        elif room.get("processing_since") is not None:
+            # Processing hold: no clock runs (nothing can forfeit), but a
+            # lost/slow transcription task must not freeze the debate — past
+            # the cap, the held turn's prep window opens anyway.
+            if now > room["processing_since"] + timedelta(
+                    seconds=config.PROCESSING_HOLD_MAX_SECONDS):
+                _begin_turn_prep(room, now)
+                changed = True
+            break
         else:
             break
         overdue = now > deadline + timedelta(seconds=config.NOSHOW_GRACE_SECONDS)
@@ -400,11 +462,14 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "turn_deadline_at": _iso(room["turn_deadline_at"]),
         "turn_prep_deadline_at": _iso(room.get("turn_prep_deadline_at")),
         "turn_started": room["turn_deadline_at"] is not None,
+        "processing": is_processing(room),
         "turns": turns,
         "finish_requested": room["finish_requested"],
         "both_ready": both_ready(room),
         "judging_status": (room.get("judging") or {}).get("status"),
         "verdict": room["verdict"],
+        # Set once the creator starts a rematch; the opponent's poll follows it.
+        "rematch_code": (room.get("rematch") or {}).get("code"),
         "expires_at": _iso(room["expires_at"]),
         "server_now": _iso(now),
     }

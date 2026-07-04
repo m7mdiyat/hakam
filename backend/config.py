@@ -60,6 +60,11 @@ SUBMIT_GRACE_SECONDS = _int("HAKAM_SUBMIT_GRACE_SECONDS", 45)
 # fire strictly AFTER the last acceptable submit, or either side's 2s poll
 # forfeits a turn whose upload is still in flight.
 NOSHOW_GRACE_SECONDS = _int("HAKAM_NOSHOW_GRACE_SECONDS", 10)
+# After a turn is submitted, the NEXT turn's prep window is held until the
+# submitted turn's transcript reaches a terminal status (the opponent replies
+# to a transcribed turn). This caps the hold — past it the prep window starts
+# anyway, so a lost/slow transcription task can never freeze a debate.
+PROCESSING_HOLD_MAX_SECONDS = _int("HAKAM_PROCESSING_HOLD_MAX_SECONDS", 60)
 # Non-terminal room with no activity for this long -> abandoned.
 ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
 # Presence: clients poll every 2s with their token; a debater unseen for
