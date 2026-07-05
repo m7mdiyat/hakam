@@ -76,7 +76,11 @@ ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
 TURN_KEY_ID = os.environ.get("HAKAM_TURN_KEY_ID", "").strip()
 TURN_API_TOKEN = os.environ.get("HAKAM_TURN_API_TOKEN", "").strip()
 TURN_TTL_SECONDS = _int("HAKAM_TURN_TTL_SECONDS", 4 * 3600)
-STUN_URLS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+# Port diversity matters more than server count: production devices gathered
+# ZERO srflx candidates on networks filtering UDP high ports — Cloudflare's
+# STUN on :53 (the DNS port) survives nearly every filter.
+STUN_URLS = ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53",
+             "stun:stun.l.google.com:19302"]
 # A signal blob older than this collapses to a {gen} stub in the poll — the
 # SDP is only needed during the handshake; stubs keep the 2s payload small.
 RTC_SIGNAL_FRESH_SECONDS = _int("HAKAM_RTC_SIGNAL_FRESH_SECONDS", 90)

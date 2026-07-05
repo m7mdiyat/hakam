@@ -110,7 +110,14 @@ export function createLiveLink({ code, token, side, onStatus }) {
   async function newPc(withSendSlot) {
     if (!iceServers) {
       try { iceServers = (await api.getIce(code, token)).iceServers; }
-      catch { iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }]; }
+      catch {
+        // /ice unreachable: mirror the server's STUN set, incl. the :53
+        // (DNS-port) entry that survives UDP-filtering networks.
+        iceServers = [{
+          urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.cloudflare.com:53',
+                 'stun:stun.l.google.com:19302'],
+        }];
+      }
     }
     if (destroyed) return null;
     const p = new RTCPeerConnection({ iceServers });
