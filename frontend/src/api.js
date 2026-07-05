@@ -46,6 +46,12 @@ export const api = {
       body: JSON.stringify({ rounds_per_side: roundsPerSide }),
     }).then(handle),
 
+  // Join as a named spectator (read-only; listed in the spectator strip).
+  spectate: (code, name) =>
+    fetch(`${API}/rooms/${code}/spectate`, {
+      method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ name }),
+    }).then(handle),
+
   // Creator rewords the topic (pre-debate only; resets both ready flags).
   setTopic: (code, token, topic) =>
     fetch(`${API}/rooms/${code}/topic`, {

@@ -1,4 +1,4 @@
-import { header } from '../components.js';
+import { header, spectatorsHtml, wireSpectatorShare } from '../components.js';
 import { mic as micIcon, ring, CIRC, play as playIcon, stop as stopIcon } from '../icons.js';
 import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
@@ -19,9 +19,10 @@ const roundLabel = (r) => `الجولة ${ROUND_AR[r - 1] || r}`;
 export function mountDebate(root, ctx) {
   const { code } = ctx;
   const token = ctx.creds.token;
-  const mine = ctx.creds.side;
+  const mine = ctx.creds.side;                 // null for spectators
+  const spectator = ctx.role === 'spectator';  // read-only: no mic, no finish
 
-  root.innerHTML = header('المناظرة') + `
+  root.innerHTML = header(spectator ? 'مشاهدة' : 'المناظرة') + `
     <div class="screen-body debate">
       <div class="debate-topic" data-topic></div>
       <div class="chips" data-chips></div>
@@ -37,11 +38,12 @@ export function mountDebate(root, ctx) {
         <div class="turn-label" data-turnlabel></div>
       </div>
 
+      ${spectator ? '' : `
       <div class="mic-wrap">
         <button class="mic" data-mic type="button"><span class="mic-glyph" data-mic-glyph></span></button>
         <canvas class="wave" data-wave width="224" height="36" hidden></canvas>
         <div class="mic-label" data-mic-label></div>
-      </div>
+      </div>`}
 
       <div class="turns-panel">
         <div class="panel-head"><span>الجولات المسجّلة</span></div>
@@ -49,12 +51,15 @@ export function mountDebate(root, ctx) {
       </div>
 
       <div class="dots" data-dots></div>
+      <div data-spectators></div>
 
+      ${spectator ? '' : `
       <div class="finish">
         <button class="btn btn-ghost btn-sm" data-finish type="button">طلب إنهاء المناظرة</button>
         <div class="micro-2" data-finish-hint>يتطلب موافقة الطرفين</div>
-      </div>
+      </div>`}
     </div>`;
+  wireSpectatorShare(root, code);
 
   const $ = (s) => root.querySelector(s);
   const ringWrap = root.querySelector('.ring-wrap');
@@ -168,7 +173,7 @@ export function mountDebate(root, ctx) {
   }
 
   function refreshMic() {
-    if (recording || uploading) return;
+    if (spectator || recording || uploading) return;
     if (!isSupported()) {
       micBtn.disabled = true;
       micGlyph.innerHTML = micIcon(34, 'var(--muted-2)', 1.8);
@@ -223,7 +228,7 @@ export function mountDebate(root, ctx) {
 
   // --- live mic level (waveform bars + orb glow) ---------------------------
   const waveEl = $('[data-wave]');
-  const wctx = waveEl.getContext('2d');
+  const wctx = waveEl ? waveEl.getContext('2d') : null;  // no canvas for spectators
   const LEVELS = new Array(28).fill(0);
   function drawLevel(rms) {
     LEVELS.unshift(rms);
@@ -301,12 +306,14 @@ export function mountDebate(root, ctx) {
 
   // Tap to toggle: one press starts recording, the next press stops and sends.
   // (The server-side deadline still auto-stops via TurnRecorder's maxMs timer.)
-  micBtn.addEventListener('click', () => {
-    if (micBtn.disabled || uploading) return;
-    if (recording) stopRec();
-    else startRec();
-  });
-  micBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  if (!spectator) {
+    micBtn.addEventListener('click', () => {
+      if (micBtn.disabled || uploading) return;
+      if (recording) stopRec();
+      else startRec();
+    });
+    micBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
   // --- recorded-turn playback -------------------------------------------
   const audioEl = new Audio();
@@ -337,11 +344,13 @@ export function mountDebate(root, ctx) {
   });
 
   // --- finish ------------------------------------------------------------
-  finishBtn.addEventListener('click', async () => {
-    finishBtn.disabled = true;
-    try { apply(await api.finish(code, token)); }
-    catch (e) { finishBtn.disabled = false; toast(e.message || 'تعذّر الطلب'); }
-  });
+  if (!spectator) {
+    finishBtn.addEventListener('click', async () => {
+      finishBtn.disabled = true;
+      try { apply(await api.finish(code, token)); }
+      catch (e) { finishBtn.disabled = false; toast(e.message || 'تعذّر الطلب'); }
+    });
+  }
 
   // --- render ------------------------------------------------------------
   // Re-rendered every poll: presence («غير متصل») changes over time.
@@ -475,21 +484,26 @@ export function mountDebate(root, ctx) {
     renderDots(state);
     renderTurns(state);
     refreshMic();
+    root.querySelector('[data-spectators]').innerHTML =
+      spectatorsHtml(state, { shareCode: code });
 
-    // finish state
-    const iAsked = state.finish_requested[mine];
-    const otherAsked = state.finish_requested[mine === 'a' ? 'b' : 'a'];
-    finishBtn.disabled = iAsked;
-    finishBtn.textContent = iAsked ? 'طلبت الإنهاء' : 'طلب إنهاء المناظرة';
-    finishHint.textContent = otherAsked && !iAsked
-      ? 'الطرف الآخر طلب الإنهاء — وافق لإنهاء المناظرة'
-      : 'يتطلب موافقة الطرفين';
-    finishHint.classList.toggle('hint-active', otherAsked && !iAsked);
+    // finish state (participants only)
+    if (!spectator) {
+      const iAsked = state.finish_requested[mine];
+      const otherAsked = state.finish_requested[mine === 'a' ? 'b' : 'a'];
+      finishBtn.disabled = iAsked;
+      finishBtn.textContent = iAsked ? 'طلبت الإنهاء' : 'طلب إنهاء المناظرة';
+      finishHint.textContent = otherAsked && !iAsked
+        ? 'الطرف الآخر طلب الإنهاء — وافق لإنهاء المناظرة'
+        : 'يتطلب موافقة الطرفين';
+      finishHint.classList.toggle('hint-active', otherAsked && !iAsked);
+    }
   }
 
   // If the mic permission is already granted, open the shared stream now so the
   // first tap records instantly (and the debate never re-prompts). Never prompts.
-  warmMic();
+  // Spectators never touch the mic at all — not even a permission query.
+  if (!spectator) warmMic();
 
   return {
     update: apply,
@@ -497,7 +511,7 @@ export function mountDebate(root, ctx) {
       if (raf) cancelAnimationFrame(raf);
       stopRecTick();
       if (recording && rec) rec.cancel();
-      releaseMic();   // debate over (or navigated away): let go of the device
+      if (!spectator) releaseMic();   // debate over (or navigated away): let go of the device
       try { audioEl.pause(); } catch { /* ignore */ }
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
     },

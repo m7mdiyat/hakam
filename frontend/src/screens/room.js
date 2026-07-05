@@ -1,6 +1,6 @@
 import { mountMessage } from '../components.js';
-import { creds } from '../store.js';
-import { mountLobby } from './lobby.js';
+import { creds, specCreds } from '../store.js';
+import { mountLobby, mountSpectatorLobby } from './lobby.js';
 import { mountDebate } from './debate.js';
 import { mountVerdict } from './verdict.js';
 
@@ -18,24 +18,28 @@ export function createRoomView(root, ctx) {
   let kind = null;
   let sub = null;
 
+  const clearMyCreds = () =>
+    (ctx.role === 'spectator' ? specCreds : creds).clear(ctx.code);
+
   function mountKind(k) {
     if (sub && sub.unmount) sub.unmount();
     root.innerHTML = '';
     kind = k;
-    if (k === 'lobby') sub = mountLobby(root, ctx);
-    else if (k === 'debate') sub = mountDebate(root, ctx);
+    if (k === 'lobby') {
+      sub = ctx.role === 'spectator' ? mountSpectatorLobby(root, ctx) : mountLobby(root, ctx);
+    } else if (k === 'debate') sub = mountDebate(root, ctx);
     else if (k === 'verdict') sub = mountVerdict(root, ctx);
     else if (k === 'abandoned') {
       sub = mountMessage(root, {
         label: 'الجلسة', title: 'انتهت الجلسة',
         body: 'انتهت المناظرة بسبب عدم النشاط.',
-        cta: 'مناظرة جديدة', onCta: () => { creds.clear(ctx.code); ctx.navigate('/'); },
+        cta: 'مناظرة جديدة', onCta: () => { clearMyCreds(); ctx.navigate('/'); },
       });
     } else if (k === 'gone') {
       sub = mountMessage(root, {
         label: 'الجلسة', title: 'انتهت صلاحية الجلسة',
         body: 'لم تعد هذه الجلسة متاحة.',
-        cta: 'مناظرة جديدة', onCta: () => { creds.clear(ctx.code); ctx.navigate('/'); },
+        cta: 'مناظرة جديدة', onCta: () => { clearMyCreds(); ctx.navigate('/'); },
       });
     }
   }

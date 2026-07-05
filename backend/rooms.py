@@ -318,16 +318,44 @@ def submit_turn(code):
     return _view(_maybe_judge(room))
 
 
+@api.post("/rooms/<code>/spectate")
+def spectate(code):
+    """Join as a named spectator: a read-only follow of the room in any live
+    state, listed in the spectator strip for everyone. No claim, no consent —
+    spectators are never recorded."""
+    if not get_store().rate_check(
+        f"spectate:{_client_ip()}", config.CREATE_RATE_LIMIT, config.CREATE_RATE_WINDOW_SECONDS
+    ):
+        raise ApiError(429, "rate_limited", "محاولات كثيرة. حاول بعد قليل.")
+    name = _clean(_body().get("name"), NAME_MAX, "الاسم")
+    _load(code)  # existence/expiry check before we mint a token
+    token = gen_token()
+
+    def mut(r: dict):
+        if len(r.get("spectators") or {}) >= config.SPECTATOR_MAX:
+            raise ApiError(409, "spectators_full", "اكتمل عدد المشاهدين لهذه الجلسة.")
+        S.add_spectator(r, token, name, S.now_utc())
+
+    room = get_store().update(normalize_code(code), mut)
+    return jsonify({"token": token, "room": S.public_view(room)}), 201
+
+
 @api.get("/rooms/<code>")
 def get_room(code):
     """Poll target. When the poller identifies itself (token header), its
     presence is bumped — throttled so the 2s poll doesn't write Firestore
-    every request. Presence powers the «غير متصل» indicator."""
+    every request. Presence powers «غير متصل» and the spectator strip."""
     room = _load(code)
-    side = S.side_of_token(room, _token())
+    token = _token()
+    side = S.side_of_token(room, token)
     if side and S.presence_stale(room, side):
         room = get_store().update(normalize_code(code),
                                   lambda r: S.bump_presence(r, side, S.now_utc()))
+    elif side is None and S.spectator_of_token(room, token) \
+            and S.spectator_presence_stale(room, token):
+        room = get_store().update(
+            normalize_code(code),
+            lambda r: S.bump_spectator_presence(r, token, S.now_utc()))
     return _view(room)
 
 
@@ -420,9 +448,11 @@ def internal_transcribe():
 
 @api.get("/rooms/<code>/turns/<turn>/audio")
 def turn_audio(code, turn):
-    # Participants only; stream the private blob back through Flask.
+    # Participants and named spectators; stream the private blob through Flask.
     room = _load(code)
-    _require_side(room)
+    if S.side_of_token(room, _token()) is None \
+            and not S.spectator_of_token(room, _token()):
+        raise ApiError(401, "unauthorized", "رمز غير صالح لهذه الجلسة.")
     entry = next((t for t in room["turns"] if t["turn"] == turn and t.get("audio_uri")), None)
     if entry is None:
         raise ApiError(404, "no_audio", "لا يوجد تسجيل لهذه الجولة.")

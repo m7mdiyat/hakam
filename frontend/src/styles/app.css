@@ -263,6 +263,26 @@ button { font-family: inherit; }
 .chip-b { background: var(--coral-bg-10); border: 1px solid var(--coral-line-32); color: var(--coral-light); }
 .chip-b b { color: var(--coral); }
 
+/* «يشاهد الآن» strip + spectator affordances */
+.spec-strip {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  gap: 6px 10px; font-size: 12.5px; color: var(--muted); text-align: center;
+}
+.spec-strip svg { flex: none; }
+.spec-count { font-weight: 500; font-variant-numeric: tabular-nums; }
+.spec-names { color: var(--muted-2); }
+.spec-share, .spec-share-row {
+  background: none; border: none; cursor: pointer; font: inherit;
+  color: var(--muted); text-decoration: underline; text-underline-offset: 3px;
+  font-size: 12.5px; padding: 0;
+}
+.spec-share:hover, .spec-share-row:hover { color: var(--ink); }
+.spec-share-row {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 2px 0;
+}
+.spec-note { text-align: center; }
+
 .timer { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .ring-wrap { position: relative; width: 196px; height: 196px; }
 .ring { display: block; }

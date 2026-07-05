@@ -3,11 +3,11 @@
 // While state == deliberating with no verdict yet, shows «الحَكَم يراجع الحجج»
 // and retriggers judging when the server reports null/failed (lease-guarded
 // server-side, so firing is always safe).
-import { header, toast } from '../components.js';
+import { header, toast, spectatorsHtml, wireSpectatorShare } from '../components.js';
 import { logo, play as playIcon, stop as stopIcon } from '../icons.js';
 import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
-import { creds } from '../store.js';
+import { creds, specCreds } from '../store.js';
 import { createProofPlayer } from '../audioproof.js';
 
 const AXES = ['logic', 'relevance', 'rebuttal', 'clarity', 'composure'];
@@ -396,7 +396,7 @@ function transcriptPanelHtml(state) {
     </div>`;
 }
 
-export function verdictHtml(state) {
+export function verdictHtml(state, spectator = false) {
   const v = state.verdict;
   // v2: the argument analysis is the main event; axes/radar demote to a
   // collapsed strip. v1 docs (≤24h old) render the classic layout.
@@ -418,10 +418,12 @@ export function verdictHtml(state) {
       ${momentHtml(v)}
       ${tipsHtml(state, v)}
       ${transcriptPanelHtml(state)}
+      <div data-spectators></div>
       <div class="verdict-actions">
         <button class="btn btn-gold" data-share type="button">شارك الحُكْم</button>
+        ${spectator ? '' : `
         <button class="btn btn-ghost" data-rematch type="button">أعد المناظرة مع نفس الخصم</button>
-        <button class="linklike" data-new type="button">موضوع جديد</button>
+        <button class="linklike" data-new type="button">موضوع جديد</button>`}
       </div>
     </div>`;
 }
@@ -468,18 +470,31 @@ function shareText(state, v) {
 export function mountVerdict(root, ctx) {
   const { code } = ctx;
   const token = ctx.creds.token;
+  const spectator = ctx.role === 'spectator';
   let mode = null;              // 'wait' | 'verdict'
   let lastRetrigger = 0;
   let player = null;
   let delibTimer = null;
   let delibIdx = 0;
   let followedRematch = false;
+  wireSpectatorShare(root, code);
 
-  // Move to the rematch room. Tokens carry over server-side, so each client
-  // keeps its own seat: same token, same side, new code.
+  // Move to the rematch room. Debater tokens carry over server-side, so each
+  // client keeps its own seat: same token, same side, new code. A spectator
+  // has no seat there — they re-join the new room with their saved name.
   function goRematch(newCode) {
     if (followedRematch) return;
     followedRematch = true;
+    if (spectator) {
+      const name = (specCreds.get(code) || {}).name || 'مشاهد';
+      api.spectate(newCode, name)
+        .then((r) => {
+          specCreds.set(newCode, r.token, name);
+          ctx.navigate(`/s/${newCode}`);
+        })
+        .catch(() => { followedRematch = false; /* next poll retries */ });
+      return;
+    }
     creds.set(newCode, token, ctx.creds.side);
     ctx.navigate(`/r/${newCode}`);
   }
@@ -514,7 +529,7 @@ export function mountVerdict(root, ctx) {
   }
 
   function renderVerdict(state) {
-    root.innerHTML = header('الحُكْم') + verdictHtml(state);
+    root.innerHTML = header('الحُكْم') + verdictHtml(state, spectator);
     player = createProofPlayer(code, token, markProofs);
 
     root.addEventListener('click', (e) => {
@@ -551,28 +566,36 @@ export function mountVerdict(root, ctx) {
         else { await navigator.clipboard.writeText(text); toast('نُسخ الحُكْم'); }
       } catch { /* share sheet dismissed */ }
     });
-    root.querySelector('[data-rematch]').addEventListener('click', async (e) => {
-      // Creator only: the server links a fresh room (same seats, same tokens)
-      // and the opponent's poll follows rematch_code automatically.
-      if (ctx.creds.side !== 'a') {
-        toast('منشئ الجلسة فقط يبدأ الإعادة — ستنتقل تلقائيًا حين يبدأها');
-        return;
-      }
-      e.target.disabled = true;
-      try {
-        const { code: newCode } = await api.rematch(code, token);
-        goRematch(newCode);
-      } catch (err) { e.target.disabled = false; toast(err.message || 'تعذّر بدء الإعادة'); }
-    });
-    root.querySelector('[data-new]').addEventListener('click', () => {
-      creds.clear(code);
-      ctx.navigate('/');
-    });
+    const rematchBtn = root.querySelector('[data-rematch]');
+    if (rematchBtn) {
+      rematchBtn.addEventListener('click', async (e) => {
+        // Creator only: the server links a fresh room (same seats, same
+        // tokens) and the opponent's poll follows rematch_code automatically.
+        if (ctx.creds.side !== 'a') {
+          toast('منشئ الجلسة فقط يبدأ الإعادة — ستنتقل تلقائيًا حين يبدأها');
+          return;
+        }
+        e.target.disabled = true;
+        try {
+          const { code: newCode } = await api.rematch(code, token);
+          goRematch(newCode);
+        } catch (err) { e.target.disabled = false; toast(err.message || 'تعذّر بدء الإعادة'); }
+      });
+    }
+    const newBtn = root.querySelector('[data-new]');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        creds.clear(code);
+        ctx.navigate('/');
+      });
+    }
   }
 
   function maybeRetrigger(state) {
     // Server lease makes this idempotent; the client just nudges when judging
     // is missing (forfeit entry path) or failed, with a 10s cooldown.
+    // Spectator tokens can't fire /judge — the debaters' clients handle it.
+    if (spectator) return;
     const st = state.judging_status;
     if ((st == null || st === 'failed') && Date.now() - lastRetrigger > 10000) {
       lastRetrigger = Date.now();
@@ -585,13 +608,17 @@ export function mountVerdict(root, ctx) {
       // The creator started a rematch: both clients follow it (the creator
       // already navigated from the click; this catches the opponent's poll).
       if (state.rematch_code && !followedRematch) {
-        toast('مناظرة جديدة مع نفس الخصم — جارٍ الانتقال…');
+        toast(spectator ? 'بدأت مناظرة جديدة — جارٍ الانتقال…'
+          : 'مناظرة جديدة مع نفس الخصم — جارٍ الانتقال…');
         goRematch(state.rematch_code);
         return;
       }
       if (state.verdict) {
         // The verdict interrupts the deliberation loop immediately.
         if (mode !== 'verdict') { mode = 'verdict'; stopDelibCycle(); renderVerdict(state); }
+        // The strip stays live while everyone lingers on the verdict.
+        const specEl = root.querySelector('[data-spectators]');
+        if (specEl) specEl.innerHTML = spectatorsHtml(state, { shareCode: code });
         return;
       }
       const failed = state.judging_status === 'failed';

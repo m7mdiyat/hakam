@@ -72,6 +72,14 @@ ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
 # poll doesn't write Firestore on every request.
 PRESENCE_TTL_SECONDS = _int("HAKAM_PRESENCE_TTL_SECONDS", 15)
 PRESENCE_BUMP_SECONDS = _int("HAKAM_PRESENCE_BUMP_SECONDS", 8)
+# Spectators: named read-only viewers on the room doc. Their presence bumps
+# are throttled harder than debaters' (and the TTL sits above the bump so an
+# active viewer never flickers offline); the cap bounds worst-case write rate
+# on the room doc (~MAX/BUMP writes/sec), not the product ambition — thousands
+# of viewers arrive with the broadcast phase and a different presence design.
+SPECTATOR_MAX = _int("HAKAM_SPECTATOR_MAX", 30)
+SPECTATOR_PRESENCE_BUMP_SECONDS = _int("HAKAM_SPECTATOR_PRESENCE_BUMP_SECONDS", 20)
+SPECTATOR_PRESENCE_TTL_SECONDS = _int("HAKAM_SPECTATOR_PRESENCE_TTL_SECONDS", 30)
 # Room hard-expires (410) this many hours after creation; also drives Firestore TTL.
 ROOM_TTL_HOURS = _int("HAKAM_ROOM_TTL_HOURS", 24)
 

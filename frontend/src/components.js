@@ -1,5 +1,5 @@
 // Shared UI pieces used across screens.
-import { logo } from './icons.js';
+import { logo, eye } from './icons.js';
 import { esc, initial } from './ui.js';
 
 export function header(label, opts = {}) {
@@ -22,6 +22,31 @@ export function toast(msg) {
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+// «يشاهد الآن» strip: online spectators by name, with an optional copy button
+// for the spectator link. Renders empty when nobody watches and there is
+// nothing to share — screens re-set innerHTML on every poll.
+export function spectatorsHtml(state, { shareCode = null } = {}) {
+  const on = (state.spectators || []).filter((s) => s.online !== false);
+  if (!on.length && !shareCode) return '';
+  const names = on.map((s) => esc(s.name)).join('، ');
+  return `<div class="spec-strip">
+    ${eye(14)}
+    <span class="spec-count">${on.length ? `يشاهد الآن ${on.length}` : 'لا مشاهدين بعد'}</span>
+    ${names ? `<span class="spec-names">${names}</span>` : ''}
+    ${shareCode ? '<button type="button" class="spec-share" data-spec-share>انسخ رابط المشاهدة</button>' : ''}
+  </div>`;
+}
+
+// Delegated once on a stable container: survives the poll's innerHTML churn.
+export function wireSpectatorShare(container, code) {
+  container.addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-spec-share]')) return;
+    const link = `${location.origin}/s/${code}`;
+    try { await navigator.clipboard.writeText(link); toast('نُسخ رابط المشاهدة'); }
+    catch { toast('انسخ الرابط يدويًا'); }
+  });
 }
 
 // A centered single-card message screen (gone / abandoned / errors).

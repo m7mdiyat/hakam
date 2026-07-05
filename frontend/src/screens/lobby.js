@@ -1,10 +1,73 @@
-import { header, avatar, toast } from '../components.js';
-import { check } from '../icons.js';
+import { header, avatar, toast, spectatorsHtml, wireSpectatorShare } from '../components.js';
+import { check, eye } from '../icons.js';
 import { copy as copyIcon } from '../icons.js';
 import { api } from '../api.js';
 import { esc } from '../ui.js';
 
 const LABEL = { a: 'الطرف الأول', b: 'الطرف الثاني' };
+const ROUNDS_TEXT = { 1: 'جولة واحدة لكل طرف', 2: 'جولتان لكل طرف', 3: '٣ جولات لكل طرف' };
+
+function turnLenText(secs) {
+  return secs === 120 ? 'دقيقتان للجولة' : secs === 60 ? 'دقيقة للجولة' : `${secs} ثانية للجولة`;
+}
+
+function statusHTML(side, d) {
+  if (!d.joined) {
+    return side === 'b'
+      ? `<span class="pending"><i class="dot dot-${side}"></i>ينضم الآن…</span>`
+      : '';
+  }
+  if (d.ready) return `<span class="ready ready-${side}">${check(14, side === 'a' ? 'var(--teal)' : 'var(--coral)')}جاهز</span>`;
+  return '<span class="micro-2">لم يجهز بعد</span>';
+}
+
+// `mine` = viewer's side ('a'/'b') for the edit affordance; null = read-only
+// (spectator lobby).
+function debaterCardHtml(side, d, mine) {
+  return `
+    <div class="dcard dcard-${side}">
+      <div class="dcard-head">
+        <div class="dcard-id">
+          ${avatar(side, d.name)}
+          <div class="dcard-meta">
+            <div class="micro">${LABEL[side]}</div>
+            <div class="dcard-name">${esc(d.name || '…')}</div>
+          </div>
+        </div>
+        <div class="dcard-status">${statusHTML(side, d)}</div>
+      </div>
+      ${d.claim ? `<div class="claim-quote claim-${side}">«${esc(d.claim)}»</div>` : ''}
+      ${d.claim && side === mine
+        ? '<button type="button" class="edit-link" data-edit-claim>تعديل الدعوى</button>' : ''}
+    </div>`;
+}
+
+// Read-only lobby for spectators: both cards, format, the strip — no forms.
+export function mountSpectatorLobby(root, ctx) {
+  root.innerHTML = header('مشاهدة') + `
+    <div class="screen-body lobby">
+      <div class="topic-pill" data-topic></div>
+      <div class="cards">
+        <div data-slot-a></div>
+        <div data-slot-b></div>
+      </div>
+      <div class="format-row" data-format></div>
+      <div data-spectators></div>
+      <div class="micro-2 spec-note">أنت تشاهد — تبدأ المناظرة حين يجهز الطرفان</div>
+    </div>`;
+  wireSpectatorShare(root, ctx.code);
+
+  function apply(state) {
+    root.querySelector('[data-topic]').textContent = state.topic;
+    root.querySelector('[data-slot-a]').innerHTML = debaterCardHtml('a', state.debaters.a, null);
+    root.querySelector('[data-slot-b]').innerHTML = debaterCardHtml('b', state.debaters.b, null);
+    root.querySelector('[data-format]').innerHTML =
+      `${esc(ROUNDS_TEXT[state.format.rounds_per_side] || `${state.format.rounds_per_side} جولات`)} · ${turnLenText(state.format.turn_seconds)}`;
+    root.querySelector('[data-spectators]').innerHTML =
+      spectatorsHtml(state, { shareCode: ctx.code });
+  }
+  return { update: apply, unmount() {} };
+}
 
 export function mountLobby(root, ctx) {
   const code = ctx.code;
@@ -31,10 +94,13 @@ export function mountLobby(root, ctx) {
       </div>
 
       <div class="format-row" data-format></div>
+      <button type="button" class="spec-share-row" data-spec-share>${eye(14)} انسخ رابط المشاهدة للجمهور</button>
+      <div data-spectators></div>
       <button class="btn" data-primary></button>
     </div>`;
 
   root.querySelector('[data-invite]').textContent = inviteLink.replace(/^https?:\/\//, '');
+  wireSpectatorShare(root, code);
 
   root.querySelector('[data-copy]').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(inviteLink); toast('نُسخ الرابط'); }
@@ -89,35 +155,6 @@ export function mountLobby(root, ctx) {
   const slot = { a: root.querySelector('[data-slot-a]'), b: root.querySelector('[data-slot-b]') };
   const primaryBtn = root.querySelector('[data-primary]');
   let myFormShown = false;
-
-  function statusHTML(side, d) {
-    if (!d.joined) {
-      return side === 'b'
-        ? `<span class="pending"><i class="dot dot-${side}"></i>ينضم الآن…</span>`
-        : '';
-    }
-    if (d.ready) return `<span class="ready ready-${side}">${check(14, side === 'a' ? 'var(--teal)' : 'var(--coral)')}جاهز</span>`;
-    return '<span class="micro-2">لم يجهز بعد</span>';
-  }
-
-  function populatedCard(side, d) {
-    return `
-      <div class="dcard dcard-${side}">
-        <div class="dcard-head">
-          <div class="dcard-id">
-            ${avatar(side, d.name)}
-            <div class="dcard-meta">
-              <div class="micro">${LABEL[side]}</div>
-              <div class="dcard-name">${esc(d.name || '…')}</div>
-            </div>
-          </div>
-          <div class="dcard-status">${statusHTML(side, d)}</div>
-        </div>
-        ${d.claim ? `<div class="claim-quote claim-${side}">«${esc(d.claim)}»</div>` : ''}
-        ${d.claim && side === mine
-          ? '<button type="button" class="edit-link" data-edit-claim>تعديل الدعوى</button>' : ''}
-      </div>`;
-  }
 
   function myFormCard(side, withCancel) {
     return `
@@ -184,13 +221,8 @@ export function mountLobby(root, ctx) {
   });
 
   // --- format row: creator picks the round count; the other side sees it ----
-  const ROUNDS_TEXT = { 1: 'جولة واحدة لكل طرف', 2: 'جولتان لكل طرف', 3: '٣ جولات لكل طرف' };
   const formatEl = root.querySelector('[data-format]');
   let formatBusy = false;
-
-  function turnLenText(secs) {
-    return secs === 120 ? 'دقيقتان للجولة' : secs === 60 ? 'دقيقة للجولة' : `${secs} ثانية للجولة`;
-  }
 
   function renderFormat(state) {
     const rounds = state.format.rounds_per_side;
@@ -242,9 +274,10 @@ export function mountLobby(root, ctx) {
     lastState = state;
     renderTopicRow(state);
     renderFormat(state);
+    root.querySelector('[data-spectators]').innerHTML = spectatorsHtml(state);
 
     // Opponent card: always refresh (no inputs there).
-    slot[other].innerHTML = populatedCard(other, state.debaters[other]);
+    slot[other].innerHTML = debaterCardHtml(other, state.debaters[other], mine);
 
     // My card: form until my claim is set, then a populated card (safe to
     // refresh). An open edit form is never stomped by the poll.
@@ -252,7 +285,7 @@ export function mountLobby(root, ctx) {
       /* keep the form as-is */
     } else if (state.debaters[mine].claim) {
       myFormShown = false;
-      slot[mine].innerHTML = populatedCard(mine, state.debaters[mine]);
+      slot[mine].innerHTML = debaterCardHtml(mine, state.debaters[mine], mine);
     } else if (!myFormShown) {
       mountMyForm(mine);
     }

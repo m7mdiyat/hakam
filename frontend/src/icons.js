@@ -27,6 +27,11 @@ export const play = (size = 16, stroke = 'var(--ink-2)', sw = 1.8) => svg(size, 
 export const stop = (size = 16, stroke = 'var(--ink-2)', sw = 1.8) => svg(size, stroke, sw,
   '<rect x="6" y="6" width="12" height="12" rx="2" fill="' + stroke + '"/>');
 
+// Eye — spectator strip («يشاهد الآن»).
+export const eye = (size = 15, stroke = 'var(--muted)', sw = 1.6) => svg(size, stroke, sw,
+  '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>' +
+  '<circle cx="12" cy="12" r="3"/>');
+
 // Shield — «بدون تسجيل حساب» feature icon.
 export const shield = (size = 18, stroke = 'var(--muted)', sw = 1.5) => svg(size, stroke, sw,
   '<path d="M12 3l7 3v5c0 4.6-3 7.7-7 9.2-4-1.5-7-4.6-7-9.2V6z"/>');

@@ -78,6 +78,7 @@ def new_room(code: str, topic: str, token_a: str) -> dict:
         "turns": [],
         "finish_requested": {"a": False, "b": False},
         "verdict": None,  # Phase 2
+        "spectators": {},  # token -> {name, joined_at, last_seen_at}; read-only viewers
         "secret_tokens": {"a": token_a, "b": None},
         "created_at": now,
         "updated_at": now,
@@ -137,6 +138,36 @@ def presence_stale(room: dict, side: str, now: Optional[datetime] = None) -> boo
 
 def bump_presence(room: dict, side: str, now: Optional[datetime] = None) -> None:
     room["debaters"][side]["last_seen_at"] = now or now_utc()
+
+
+# --- spectators (named read-only viewers) ------------------------------------
+def spectator_of_token(room: dict, token: Optional[str]) -> bool:
+    return bool(token) and token in (room.get("spectators") or {})
+
+
+def add_spectator(room: dict, token: str, name: str, now: Optional[datetime] = None) -> None:
+    """Seat a named spectator. Caller enforces the cap. Does NOT bump
+    last_activity_at — viewers must not keep an idle debate from abandoning."""
+    now = now or now_utc()
+    room.setdefault("spectators", {})[token] = {
+        "name": name, "joined_at": now, "last_seen_at": now,
+    }
+    _touch(room, now)
+
+
+def spectator_presence_stale(room: dict, token: str, now: Optional[datetime] = None) -> bool:
+    now = now or now_utc()
+    entry = (room.get("spectators") or {}).get(token)
+    if entry is None:
+        return False
+    seen = entry.get("last_seen_at")
+    return seen is None or (now - seen).total_seconds() > config.SPECTATOR_PRESENCE_BUMP_SECONDS
+
+
+def bump_spectator_presence(room: dict, token: str, now: Optional[datetime] = None) -> None:
+    entry = (room.get("spectators") or {}).get(token)
+    if entry is not None:
+        entry["last_seen_at"] = now or now_utc()
 
 
 def is_expired(room: dict, now: Optional[datetime] = None) -> bool:
@@ -439,6 +470,15 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
                        (now - seen).total_seconds() < config.PRESENCE_TTL_SECONDS),
         }
 
+    # Names + liveness only — spectator tokens never leave the doc.
+    spectators = [{
+        "name": s["name"],
+        "online": (None if s.get("last_seen_at") is None else
+                   (now - s["last_seen_at"]).total_seconds()
+                   < config.SPECTATOR_PRESENCE_TTL_SECONDS),
+    } for s in sorted((room.get("spectators") or {}).values(),
+                      key=lambda s: s["joined_at"])]
+
     turns = [{
         "turn": t["turn"],
         "debater": t["debater"],
@@ -465,6 +505,7 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "processing": is_processing(room),
         "turns": turns,
         "finish_requested": room["finish_requested"],
+        "spectators": spectators,
         "both_ready": both_ready(room),
         "judging_status": (room.get("judging") or {}).get("status"),
         "verdict": room["verdict"],
