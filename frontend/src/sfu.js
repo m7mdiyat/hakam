@@ -40,7 +40,11 @@ export function createSfuPublisher({ code, token }) {
       if (micTrack && !muted) sender.replaceTrack(micTrack).catch(() => {});
       pc.onconnectionstatechange = () => {
         if (destroyed || !pc) return;
-        if (pc.connectionState === 'failed') restartSoon();
+        // 'disconnected' can linger forever without ever reaching 'failed';
+        // both mean spectators hear dead air — republish (fresh session +
+        // gen bump makes every listener re-pull).
+        if (pc.connectionState === 'failed') restartSoon(2000);
+        else if (pc.connectionState === 'disconnected') restartSoon(5000);
       };
       await pc.setLocalDescription(await pc.createOffer());
       const res = await api.sfuPublish(code, token, {
@@ -49,21 +53,30 @@ export function createSfuPublisher({ code, token }) {
       await pc.setRemoteDescription(res.sdp);
     } catch {
       started = false;
-      restartSoon();
+      restartSoon(6000);
     }
   }
 
-  function restartSoon() {
+  function restartSoon(delayMs) {
     if (retryTimer || destroyed) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (destroyed) return;
+      if (pc && pc.connectionState === 'connected') return;  // healed itself
       if (pc) { try { pc.close(); } catch { /* closing */ } pc = null; }
       sender = null;
       started = false;
       start();
-    }, 15000);
+    }, delayMs);
   }
+
+  // A backgrounded phone can freeze the connection without any state event:
+  // on return, restart unless provably healthy.
+  const onVisible = () => {
+    if (destroyed || document.visibilityState !== 'visible') return;
+    if (!pc || pc.connectionState !== 'connected') restartSoon(500);
+  };
+  document.addEventListener('visibilitychange', onVisible);
 
   return {
     start,
@@ -78,6 +91,7 @@ export function createSfuPublisher({ code, token }) {
     },
     destroy() {
       destroyed = true;
+      document.removeEventListener('visibilitychange', onVisible);
       if (retryTimer) clearTimeout(retryTimer);
       if (pc) { try { pc.close(); } catch { /* closing */ } }
     },
@@ -128,6 +142,15 @@ export function createSfuListener({ code, token, onStatus }) {
   document.addEventListener('touchend', unlock, true);
   document.addEventListener('keydown', unlock, true);
 
+  // A locked phone / app switch pauses the element and can freeze the
+  // connection with no state event — heal both on return.
+  const onVisible = () => {
+    if (destroyed || document.visibilityState !== 'visible') return;
+    if (pc && pc.connectionState === 'connected') tryPlay();
+    else lastKey = null;                             // next poll reconnects
+  };
+  document.addEventListener('visibilitychange', onVisible);
+
   async function connect() {
     if (connecting || destroyed) return;
     connecting = true;
@@ -144,7 +167,16 @@ export function createSfuListener({ code, token, onStatus }) {
       pc.onconnectionstatechange = () => {
         if (destroyed || !pc) return;
         if (pc.connectionState === 'connected') tryPlay();
-        if (pc.connectionState === 'failed') { lastKey = null; }  // next poll reconnects
+        // failed OR lingering disconnected: let the next poll rebuild.
+        if (pc.connectionState === 'failed') lastKey = null;
+        else if (pc.connectionState === 'disconnected') {
+          const dead = pc;
+          setTimeout(() => {
+            if (!destroyed && pc === dead && dead.connectionState === 'disconnected') {
+              lastKey = null;
+            }
+          }, 5000);
+        }
         emit();
       };
       const res = await api.sfuListen(code, token);      // Cloudflare's offer
@@ -184,6 +216,7 @@ export function createSfuListener({ code, token, onStatus }) {
       document.removeEventListener('click', unlock, true);
       document.removeEventListener('touchend', unlock, true);
       document.removeEventListener('keydown', unlock, true);
+      document.removeEventListener('visibilitychange', onVisible);
       if (pc) { try { pc.close(); } catch { /* closing */ } }
       if (audioEl) { try { audioEl.srcObject = null; audioEl.muted = false; } catch { /* gone */ } }
     },

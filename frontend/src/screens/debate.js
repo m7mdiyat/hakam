@@ -37,8 +37,8 @@ export function mountDebate(root, ctx) {
           title="سماع صوت المتناظرين المباشر">
           <span class="live-ico" data-speclive-mute-ico></span><span data-speclive-mute-txt></span>
         </button>
-        <button class="live-pill live-enable" data-speclive-enable type="button" hidden>
-          <span class="live-ico">${volume(15)}</span>تفعيل الصوت المباشر</button>
+        <button class="live-pill live-enable live-enable-strong" data-speclive-enable type="button" hidden>
+          <span class="live-ico">${volume(15)}</span>اضغط لتفعيل الصوت المباشر</button>
       </div>` : `
       <div class="live-row" data-live hidden>
         <span class="live-dot" data-live-dot></span>
