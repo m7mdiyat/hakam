@@ -460,7 +460,14 @@ export function mountDebate(root, ctx) {
     const tr = t.transcript;
     if (!tr || t.forfeited) return '';
     if (tr.status === 'pending') return '<div class="turn-text turn-text-dim">جارٍ نسخ التسجيل…</div>';
-    if (tr.status === 'failed') return '<div class="turn-text turn-text-dim">تعذّر نسخ هذه الجولة</div>';
+    if (tr.status === 'failed') {
+      // no_speech = the model heard only noise/silence (an honest empty):
+      // tell the debater it was the microphone, not the app.
+      const msg = tr.reason === 'no_speech'
+        ? 'لم يلتقط الميكروفون كلامًا في هذه الجولة'
+        : 'تعذّر نسخ هذه الجولة';
+      return `<div class="turn-text turn-text-dim">${msg}</div>`;
+    }
     const text = (tr.segments || []).map((s) => esc(s.text)).join(' ');
     return text ? `<div class="turn-text">${text}</div>` : '';
   }

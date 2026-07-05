@@ -64,11 +64,17 @@ class SegmentError(ValueError):
 
 
 def normalize_segments(raw: list, duration_s: Optional[float]) -> list:
-    """Model output -> validated [{i, start_s, end_s, text}].
+    """Model output -> [{i, start_s, end_s, text}] in the model's own order.
 
-    Hard failures (unparseable/negative/out-of-range/non-monotonic starts) raise
-    SegmentError; benign sloppiness (tiny overlaps, end slightly past EOF) is
-    clamped. Ordering by start time is enforced, not assumed.
+    The TEXT is the payload — quotes anchor against the token stream and
+    playback aligns over measured speech time — while model TIMES are
+    quantized buckets whose clock drifts (a flawless 2-minute transcript
+    once arrived stamped 6s past EOF and a hard range check threw the whole
+    thing away — room PYYQWF). Times are therefore salvaged, never fatal:
+    unparseable stamps borrow a neighbour's, values clamp into the audio
+    and are made monotonic, and the ARRAY order (the model's transcription
+    order) is trusted over sorting by fictional starts. The only hard
+    failure left is a transcript with no text at all.
     """
     segs = []
     for item in raw or []:
@@ -77,27 +83,27 @@ def normalize_segments(raw: list, duration_s: Optional[float]) -> list:
             continue
         start = parse_ts(item.get("start", ""))
         end = parse_ts(item.get("end", ""))
-        if start is None or end is None:
-            raise SegmentError(f"unparseable timestamp: {item.get('start')!r}/{item.get('end')!r}")
+        if start is None and end is None:
+            start = end = segs[-1]["end_s"] if segs else 0.0
+        elif start is None:
+            start = end
+        elif end is None:
+            end = start
         if end < start:
-            start, end = end, start  # swapped pair — salvageable
+            start, end = end, start  # swapped pair
         segs.append({"start_s": start, "end_s": end, "text": text})
 
     if not segs:
         raise SegmentError("no non-empty segments")
-    segs.sort(key=lambda s: (s["start_s"], s["end_s"]))
 
-    if duration_s:
-        limit = duration_s + 2.0  # MM:SS quantization + model slack
-        if segs[-1]["start_s"] > limit or segs[0]["start_s"] < 0:
-            raise SegmentError("segment outside the audio duration")
-        for s in segs:
-            if s["start_s"] > limit:
-                raise SegmentError("segment outside the audio duration")
-            s["end_s"] = min(s["end_s"], duration_s)
-            s["start_s"] = min(s["start_s"], s["end_s"])
-
+    prev = 0.0
     for i, s in enumerate(segs):
+        s["start_s"] = max(prev, s["start_s"], 0.0)
+        s["end_s"] = max(s["end_s"], s["start_s"])
+        if duration_s:
+            s["start_s"] = min(s["start_s"], duration_s)
+            s["end_s"] = min(s["end_s"], duration_s)
+        prev = s["start_s"]
         s["i"] = i
     return segs
 
@@ -147,7 +153,7 @@ def transcribe_turn(code: str, turn_key: str) -> str:
     if stats and stats.get("max_db", 0.0) < config.SILENCE_GATE_DB:
         _write_transcript(code, turn_key, {
             "status": "failed", "segments": [], "model": config.GEMINI_MODEL,
-            "error": "silent audio (gate)",
+            "error": "silent audio (gate)", "reason": "no_speech",
         })
         return "failed"
 
@@ -190,8 +196,13 @@ def transcribe_turn(code: str, turn_key: str) -> str:
         except (GeminiError, SegmentError) as e:
             last_err = e
 
-    _write_transcript(code, turn_key, {
-        "status": "failed", "segments": [], "model": config.GEMINI_MODEL,
-        "error": str(last_err)[:200],
-    })
+    failed = {"status": "failed", "segments": [], "model": config.GEMINI_MODEL,
+              "error": str(last_err)[:200]}
+    if isinstance(last_err, SegmentError) and "no non-empty segments" in str(last_err):
+        # An honest empty, not a pipeline error: the model heard nothing to
+        # transcribe (loud non-speech — rustling, static — passes the
+        # amplitude gate; room XUXX7S recorded 27s of mic noise at −2 dB).
+        # Clients use this to tell the debater it was their microphone.
+        failed["reason"] = "no_speech"
+    _write_transcript(code, turn_key, failed)
     return "failed"

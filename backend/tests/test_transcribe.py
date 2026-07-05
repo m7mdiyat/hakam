@@ -42,12 +42,17 @@ def test_segments_happy_path():
     assert out[1] == {"i": 1, "start_s": 6.0, "end_s": 11.0, "text": "ولذلك أرى أن"}
 
 
-def test_segments_sorted_and_clamped():
+def test_segments_keep_model_order_and_clamp_monotonic():
+    # The array order is the model's transcription order — the truth. Sorting
+    # by fictional start times could scramble the token stream that quote
+    # anchoring depends on, so out-of-order stamps are clamped, not sorted.
     out = normalize_segments(
-        [_seg("00:08", "00:20"), _seg("00:00", "00:07")], duration_s=10.0
+        [_seg("00:08", "00:20", "الأولى"), _seg("00:00", "00:07", "الثانية")],
+        duration_s=10.0,
     )
-    assert out[0]["start_s"] == 0.0
-    assert out[1]["end_s"] == 10.0  # clamped to real duration
+    assert [s["text"] for s in out] == ["الأولى", "الثانية"]
+    assert out[0]["end_s"] == 10.0                    # clamped to real duration
+    assert out[1]["start_s"] >= out[0]["start_s"]     # monotonic, never sorted
 
 
 def test_segments_swapped_pair_salvaged():
@@ -55,14 +60,25 @@ def test_segments_swapped_pair_salvaged():
     assert (out[0]["start_s"], out[0]["end_s"]) == (2.0, 9.0)
 
 
-def test_segments_beyond_duration_rejected():
-    with pytest.raises(SegmentError):
-        normalize_segments([_seg("03:30", "03:40")], duration_s=10.0)
+def test_segments_beyond_duration_survive_clamped():
+    # Room PYYQWF: a flawless 2-minute transcript arrived with its tail
+    # stamped past EOF (the model's bucket clock drifts fast) and the old
+    # range check threw ALL of it away. Times are fiction — text survives.
+    out = normalize_segments(
+        [_seg("00:00", "01:55"), _seg("02:04", "02:10", "الخاتمة")],
+        duration_s=118.4,
+    )
+    assert [s["i"] for s in out] == [0, 1]
+    assert out[1]["text"] == "الخاتمة"
+    assert out[1]["end_s"] <= 118.4
 
 
-def test_segments_unparseable_rejected():
-    with pytest.raises(SegmentError):
-        normalize_segments([_seg("xx", "00:05")], duration_s=10.0)
+def test_segments_unparseable_stamp_borrows_neighbour():
+    out = normalize_segments(
+        [_seg("00:02", "00:05"), _seg("xx", "yy", "بلا وقت")], duration_s=10.0
+    )
+    assert out[1]["text"] == "بلا وقت"
+    assert out[1]["start_s"] == 5.0  # borrowed from the previous end
 
 
 def test_segments_empty_rejected():
@@ -128,6 +144,25 @@ def test_transcription_failure_marks_failed_not_crashing(client, monkeypatch):
     tr = _json(client.get(f"/api/rooms/{code}"))["turns"][0]["transcript"]
     assert tr["status"] == "failed"
     assert tr["attempts"] >= 1
+    assert "reason" not in tr  # a pipeline error is NOT blamed on the mic
+
+
+def test_model_empty_transcript_flags_no_speech(client, monkeypatch):
+    # Room XUXX7S: loud rustling passes the amplitude gate, the model rightly
+    # returns zero segments — the debater must learn it was the microphone.
+    from backend.transcribe import transcribe_turn
+
+    monkeypatch.setattr(config, "TRANSCRIBE_ENABLED", True)
+    monkeypatch.setattr("backend.transcribe.generate_json",
+                        lambda *a, **kw: {"segments": []})
+    monkeypatch.setattr("backend.tasks.enqueue_transcription", transcribe_turn)
+
+    code, token_a, _ = _room_in_debate(client)
+    _json(_submit(client, code, token_a, make_tone(3.0, "webm"),
+                  "audio/webm", "turn.webm"))
+    tr = _json(client.get(f"/api/rooms/{code}"))["turns"][0]["transcript"]
+    assert tr["status"] == "failed"
+    assert tr["reason"] == "no_speech"
 
 
 def test_internal_endpoint_requires_oidc(client):

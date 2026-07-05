@@ -120,7 +120,10 @@ def transcript_view(room: dict, mapping: dict) -> str:
             continue
         segs = _segments_ok(entry)
         if not segs:
-            lines.append(f"[{info['tid']}] {speaker}: (تعذّر نسخ هذه المداخلة)")
+            no_speech = (entry.get("transcript") or {}).get("reason") == "no_speech"
+            lines.append(f"[{info['tid']}] {speaker}: "
+                         + ("(لم يُسمَع كلام في هذه المداخلة)" if no_speech
+                            else "(تعذّر نسخ هذه المداخلة)"))
             continue
         for seg in segs:
             text = strip_names(seg["text"], names)

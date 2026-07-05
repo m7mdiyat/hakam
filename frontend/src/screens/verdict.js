@@ -373,7 +373,9 @@ function transcriptPanelHtml(state) {
     const tr = t.transcript;
     const text = tr && tr.status === 'ok'
       ? tr.segments.map((s) => esc(s.text)).join(' ')
-      : '<span class="micro-2">تعذّر نسخ هذه المداخلة</span>';
+      : `<span class="micro-2">${tr && tr.reason === 'no_speech'
+        ? 'لم يلتقط الميكروفون كلامًا في هذه المداخلة'
+        : 'تعذّر نسخ هذه المداخلة'}</span>`;
     const dur = t.duration_s ? fmtClock(t.duration_s * 1000) : 'تشغيل';
     return `<div class="tr-turn">
       <div class="tr-head">
