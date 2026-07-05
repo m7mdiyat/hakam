@@ -104,16 +104,26 @@ export function createLiveLink({ code, token, side, onStatus }) {
   document.addEventListener('touchend', unlock, true);
   document.addEventListener('keydown', unlock, true);
 
-  async function newPc() {
+  async function newPc(withSendSlot) {
     if (!iceServers) {
       try { iceServers = (await api.getIce(code, token)).iceServers; }
       catch { iceServers = [{ urls: ['stun:stun.l.google.com:19302'] }]; }
     }
     if (destroyed) return null;
     const p = new RTCPeerConnection({ iceServers });
-    const tr = p.addTransceiver('audio', { direction: 'sendrecv' });
-    sender = tr.sender;
-    if (micTrack && !selfMuted) sender.replaceTrack(micTrack).catch(() => {});
+    if (withSendSlot) {
+      // Offerer only: create the audio m-line up front.
+      const tr = p.addTransceiver('audio', { direction: 'sendrecv' });
+      sender = tr.sender;
+      if (micTrack && !selfMuted) sender.replaceTrack(micTrack).catch(() => {});
+    } else {
+      // Answerer: the offer's own m-line is adopted after setRemoteDescription
+      // (see makeAnswer). Pre-adding a transceiver here is a trap: JSEP only
+      // matches incoming m-lines against addTrack()-created transceivers, so
+      // a pre-added slot stays orphaned and the answer negotiates a=recvonly
+      // — the answerer's voice silently never sends (the one-way-audio bug).
+      sender = null;
+    }
     p.ontrack = (e) => {
       attachRemote(e.streams[0] || new MediaStream([e.track]));
       // Re-kick when RTP actually starts flowing (dead air until then).
@@ -149,7 +159,7 @@ export function createLiveLink({ code, token, side, onStatus }) {
     emit();
     try {
       if (pc) pc.close();
-      pc = await newPc();
+      pc = await newPc(true);
       if (!pc) return;
       gen = nextGen;
       await pc.setLocalDescription(await pc.createOffer());
@@ -166,9 +176,17 @@ export function createLiveLink({ code, token, side, onStatus }) {
     emit();
     try {
       if (pc) pc.close();
-      pc = await newPc();
+      pc = await newPc(false);
       if (!pc) return;
       await pc.setRemoteDescription(offer);
+      // Adopt the offer's transceiver and flip it to sendrecv so the answer
+      // actually offers our audio back (see the trap note in newPc).
+      const tr = pc.getTransceivers()[0];
+      if (tr) {
+        tr.direction = 'sendrecv';
+        sender = tr.sender;
+        if (micTrack && !selfMuted) sender.replaceTrack(micTrack).catch(() => {});
+      }
       await pc.setLocalDescription(await pc.createAnswer());
       await gathered(pc);
       await api.postRtc(code, token, { gen: offerGen, sdp: sdpJson(pc.localDescription) });
