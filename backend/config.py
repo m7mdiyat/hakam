@@ -75,6 +75,12 @@ ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
 # live audio degrades on hard NATs, the debate itself never does.
 TURN_KEY_ID = os.environ.get("HAKAM_TURN_KEY_ID", "").strip()
 TURN_API_TOKEN = os.environ.get("HAKAM_TURN_API_TOKEN", "").strip()
+# Cloudflare Realtime Serverless SFU — the spectator broadcast leg: debaters
+# publish their mic TO Cloudflare, spectators listen FROM Cloudflare (no
+# device ever connects to another device, so no IP leaks). Secrets live
+# server-side only; unset -> spectators get per-turn recordings, never live.
+SFU_APP_ID = os.environ.get("HAKAM_SFU_APP_ID", "").strip()
+SFU_APP_SECRET = os.environ.get("HAKAM_SFU_APP_SECRET", "").strip()
 TURN_TTL_SECONDS = _int("HAKAM_TURN_TTL_SECONDS", 4 * 3600)
 # Port diversity matters more than server count: production devices gathered
 # ZERO srflx candidates on networks filtering UDP high ports — Cloudflare's

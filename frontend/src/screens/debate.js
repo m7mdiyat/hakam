@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { toast } from '../components.js';
 import { TurnRecorder, isSupported, warmMic, releaseMic } from '../recorder.js';
 import { createLiveLink } from '../rtc.js';
+import { createSfuPublisher, createSfuListener } from '../sfu.js';
 
 const TEAL = 'var(--teal)';
 const CORAL = 'var(--coral)';
@@ -28,7 +29,17 @@ export function mountDebate(root, ctx) {
       <div class="debate-topic" data-topic></div>
       <div class="chips" data-chips></div>
 
-      ${spectator ? '' : `
+      ${spectator ? `
+      <div class="live-row" data-speclive hidden>
+        <span class="live-dot" data-speclive-dot></span>
+        <span class="live-status" data-speclive-status></span>
+        <button class="live-pill" data-speclive-mute type="button"
+          title="سماع صوت المتناظرين المباشر">
+          <span class="live-ico" data-speclive-mute-ico></span><span data-speclive-mute-txt></span>
+        </button>
+        <button class="live-pill live-enable" data-speclive-enable type="button" hidden>
+          <span class="live-ico">${volume(15)}</span>تفعيل الصوت المباشر</button>
+      </div>` : `
       <div class="live-row" data-live hidden>
         <span class="live-dot" data-live-dot></span>
         <span class="live-status" data-live-status></span>
@@ -143,13 +154,50 @@ export function mountDebate(root, ctx) {
   if (live) {
     renderLive(lastLiveStatus);
     root.querySelector('[data-live-self]').addEventListener('click', () => {
-      live.setSelfMuted(!live.selfMuted);
+      const m = !live.selfMuted;
+      live.setSelfMuted(m);           // opponent's ears (P2P)
+      if (sfuPub) sfuPub.setMuted(m); // spectators' ears (broadcast)
     });
     root.querySelector('[data-live-peer]').addEventListener('click', () => {
       live.setPeerMuted(!live.peerMuted);
     });
     root.querySelector('[data-live-enable]').addEventListener('click', () => {
       live.resumeAudio();
+    });
+  }
+
+  // Broadcast leg: debaters publish to the SFU (spectators' ears), spectators
+  // listen from it. Strictly additive on both sides.
+  const sfuPub = (!spectator && typeof RTCPeerConnection !== 'undefined')
+    ? createSfuPublisher({ code, token })
+    : null;
+  if (sfuPub) sfuPub.start();
+
+  function renderSpecLive(status) {
+    const row = root.querySelector('[data-speclive]');
+    if (!row) return;
+    const { state, needsGesture, muted } = status;
+    row.hidden = state === 'idle';
+    root.querySelector('[data-speclive-dot]').className =
+      `live-dot${state === 'connected' ? ' on' : state === 'failed' ? ' err' : ' busy'}`;
+    root.querySelector('[data-speclive-status]').textContent =
+      state === 'connecting' ? 'جارٍ فتح البث…'
+        : state === 'failed' ? 'تعذّر البث المباشر — التسجيلات تصل بعد كل مداخلة' : '';
+    const pill = root.querySelector('[data-speclive-mute]');
+    pill.classList.toggle('is-off', muted);
+    root.querySelector('[data-speclive-mute-ico]').innerHTML = muted ? volumeOff(15) : volume(15);
+    root.querySelector('[data-speclive-mute-txt]').textContent = muted ? 'البث مكتوم' : 'أسمع المتناظرين';
+    root.querySelector('[data-speclive-enable]').hidden = !needsGesture;
+  }
+  const sfuListener = (spectator && typeof RTCPeerConnection !== 'undefined')
+    ? createSfuListener({ code, token, onStatus: renderSpecLive })
+    : null;
+  if (sfuListener) {
+    root.querySelector('[data-speclive-mute]').addEventListener('click', () => {
+      sfuListener.setMuted(!sfuListener.muted);
+    });
+    root.querySelector('[data-speclive-enable]').addEventListener('click', () => {
+      sfuListener.resume();
     });
   }
 
@@ -286,11 +334,13 @@ export function mountDebate(root, ctx) {
       maxMs: rem,
       onStart: () => {
         if (recording) startRecTick();
-        // The live link transmits the SAME track the recorder just enabled:
-        // the opponent hears exactly what is being recorded, nothing else.
-        if (live && rec.stream) {
+        // The live links transmit the SAME track the recorder just enabled:
+        // opponent (P2P) and spectators (SFU) hear exactly what is being
+        // recorded, nothing else.
+        if (rec.stream) {
           const t = rec.stream.getAudioTracks()[0];
-          if (t) live.attachMic(t);
+          if (t && live) live.attachMic(t);
+          if (t && sfuPub) sfuPub.attachTrack(t);
         }
       },
       onStop: onRecorded,
@@ -501,6 +551,7 @@ export function mountDebate(root, ctx) {
     root.querySelector('[data-topic]').textContent = state.topic;
     renderChips(state);
     if (live && state.rtc) live.onSignal(state.rtc);
+    if (sfuListener) sfuListener.onView(state);
 
     // timer anchors: speaking clock (deadline set) vs prep window (not started)
     const secs = state.format.turn_seconds;
@@ -616,6 +667,8 @@ export function mountDebate(root, ctx) {
       stopRecTick();
       if (recording && rec) rec.cancel();
       if (live) live.destroy();
+      if (sfuPub) sfuPub.destroy();
+      if (sfuListener) sfuListener.destroy();
       if (!spectator) releaseMic();   // debate over (or navigated away): let go of the device
       try { audioEl.pause(); } catch { /* ignore */ }
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });

@@ -264,6 +264,22 @@ def rematch_room(old: dict, new_code: str, now: Optional[datetime] = None) -> di
     return room
 
 
+def set_sfu_session(room: dict, side: str, session_id: str) -> None:
+    """A debater (re)published to the broadcast SFU: store the session id
+    (server-side only — never in public_view) and bump the generation so
+    listeners know to re-pull (a refresh means a NEW session; pulls against
+    the old one would be dead air)."""
+    sfu = room.setdefault("sfu", {})
+    prev = sfu.get(side) or {}
+    sfu[side] = {"sid": session_id, "gen": int(prev.get("gen", 0)) + 1}
+
+
+def sfu_published_view(room: dict) -> dict:
+    """Public shape: generation per side (0 = not publishing); sids hidden."""
+    sfu = room.get("sfu") or {}
+    return {s: int((sfu.get(s) or {}).get("gen", 0)) for s in SIDES}
+
+
 def shared_snapshot(room: dict, share_id: str, now: Optional[datetime] = None) -> dict:
     """Public, self-contained copy of a judged debate for the «شارك الحكم»
     link. Built by WHITELIST, never by copying the room and stripping — the
@@ -598,6 +614,9 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "turns": turns,
         "finish_requested": room["finish_requested"],
         "spectators": spectators,
+        # Broadcast-SFU publish generations (0 = silent); listeners re-pull
+        # on change. Session ids never leave the doc.
+        "sfu_published": sfu_published_view(room),
         "both_ready": both_ready(room),
         "judging_status": (room.get("judging") or {}).get("status"),
         "verdict": room["verdict"],

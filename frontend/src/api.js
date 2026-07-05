@@ -107,6 +107,20 @@ export const api = {
     return URL.createObjectURL(await res.blob());
   },
 
+  // Broadcast SFU (spectator live listening) — server-proxied Cloudflare calls.
+  sfuPublish: (code, token, body) =>
+    fetch(`${API}/rooms/${code}/sfu/publish`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(body),
+    }).then(handle),
+  sfuListen: (code, token) =>
+    fetch(`${API}/rooms/${code}/sfu/listen`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({}),
+    }).then(handle),
+  sfuRenegotiate: (code, token, body) =>
+    fetch(`${API}/rooms/${code}/sfu/renegotiate`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(body),
+    }).then(handle),
+
   // «شارك الحكم»: publish the verdict as a 7-day public snapshot link.
   shareVerdict: (code, token) =>
     fetch(`${API}/rooms/${code}/share`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),

@@ -461,17 +461,123 @@ def _fetch_turn_servers():
         return None
 
 
+def _require_participant(room: dict) -> None:
+    """Debater or named spectator — the audiences that get live audio."""
+    if S.side_of_token(room, _token()) is None \
+            and not S.spectator_of_token(room, _token()):
+        raise ApiError(401, "unauthorized", "رمز غير صالح لهذه الجلسة.")
+
+
 @api.get("/rooms/<code>/ice")
 def ice_servers(code):
-    """ICE servers for the live-audio link (debaters only). STUN always;
-    TURN relay credentials are minted when Cloudflare keys are configured."""
+    """ICE servers for the live links (debaters AND spectators — broadcast
+    listeners on hostile networks need the relay too). STUN always; TURN
+    relay credentials are minted when Cloudflare keys are configured."""
     room = _load(code)
-    _require_side(room)
+    _require_participant(room)
     servers = [{"urls": config.STUN_URLS}]
     turn = _fetch_turn_servers()
     if turn:
         servers.extend(turn)
     return jsonify({"iceServers": servers})
+
+
+# --- Broadcast SFU (spectator live listening) --------------------------------
+# Debaters publish their mic TO Cloudflare; spectators listen FROM Cloudflare.
+# No device ever connects to another device (the P2P debater link stays
+# private), and the app secret never leaves this proxy.
+def _sfu_call(path: str, payload=None, method: str = "POST") -> dict:
+    if not (config.SFU_APP_ID and config.SFU_APP_SECRET):
+        raise ApiError(503, "sfu_unconfigured", "البث المباشر غير مفعّل.")
+    import json as _json
+    import logging as _logging
+    from urllib import request as _rq
+    req = _rq.Request(
+        f"https://rtc.live.cloudflare.com/v1/apps/{config.SFU_APP_ID}{path}",
+        data=_json.dumps(payload).encode() if payload is not None else None,
+        headers={"Authorization": f"Bearer {config.SFU_APP_SECRET}",
+                 "Content-Type": "application/json",
+                 # Cloudflare's WAF 403s the default urllib UA (error 1010).
+                 "User-Agent": "hakam/1.0 (+https://thehakam.com)"},
+        method=method)
+    try:
+        with _rq.urlopen(req, timeout=10) as resp:
+            return _json.loads(resp.read().decode() or "{}")
+    except Exception as e:
+        _logging.getLogger("hakam.rtc").warning("SFU %s failed: %s", path, e)
+        raise ApiError(502, "sfu_error", "تعذّر الاتصال بخدمة البث.")
+
+
+def _sdp_of(body: dict, expected: str) -> dict:
+    sdp = body.get("sdp") or {}
+    if sdp.get("type") != expected or not isinstance(sdp.get("sdp"), str):
+        raise ApiError(400, "invalid_input", f"sdp ({expected}) مطلوب.")
+    if len(sdp["sdp"]) > config.RTC_MAX_SDP_BYTES:
+        raise ApiError(413, "too_large", "SDP أكبر من المسموح.")
+    return {"type": sdp["type"], "sdp": sdp["sdp"]}
+
+
+@api.post("/rooms/<code>/sfu/publish")
+def sfu_publish(code):
+    """A debater publishes their mic to the broadcast. Each publish creates a
+    FRESH Cloudflare session (a session is one PeerConnection — a page
+    refresh must not reuse a dead one) and bumps the public generation so
+    listeners re-pull. Track name is mic-{side}; the track object is the
+    same one the recorder uses, enabled only during takes."""
+    room = _load(code)
+    side = _require_side(room)
+    body = _body()
+    offer = _sdp_of(body, "offer")
+    mid = str(body.get("mid", "")).strip()
+    if not mid:
+        raise ApiError(400, "invalid_input", "mid مطلوب.")
+    session = _sfu_call("/sessions/new")["sessionId"]
+    out = _sfu_call(f"/sessions/{session}/tracks/new", {
+        "sessionDescription": offer,
+        "tracks": [{"location": "local", "mid": mid, "trackName": f"mic-{side}"}],
+    })
+    if not (out.get("sessionDescription") or {}).get("sdp"):
+        raise ApiError(502, "sfu_error", "تعذّر تسجيل البث.")
+
+    def mut(r: dict):
+        S.set_sfu_session(r, side, session)
+
+    get_store().update(normalize_code(code), mut)
+    return jsonify({"sdp": out["sessionDescription"]})
+
+
+@api.post("/rooms/<code>/sfu/listen")
+def sfu_listen(code):
+    """A participant (spectator or debater) opens a listener session pulling
+    every published mic. Cloudflare responds with an OFFER the client
+    answers via sfu/renegotiate."""
+    room = _load(code)
+    _require_participant(room)
+    pubs = room.get("sfu") or {}
+    tracks = [{"location": "remote", "sessionId": p["sid"], "trackName": f"mic-{s}"}
+              for s, p in sorted(pubs.items()) if p and p.get("sid")]
+    if not tracks:
+        raise ApiError(409, "no_publishers", "لا بث مباشر بعد.")
+    session = _sfu_call("/sessions/new")["sessionId"]
+    out = _sfu_call(f"/sessions/{session}/tracks/new", {"tracks": tracks})
+    if not (out.get("sessionDescription") or {}).get("sdp"):
+        raise ApiError(502, "sfu_error", "تعذّر فتح البث.")
+    return jsonify({"session_id": session, "sdp": out["sessionDescription"],
+                    "tracks": out.get("tracks") or []})
+
+
+@api.post("/rooms/<code>/sfu/renegotiate")
+def sfu_renegotiate(code):
+    room = _load(code)
+    _require_participant(room)
+    body = _body()
+    session = str(body.get("session_id", "")).strip()
+    answer = _sdp_of(body, "answer")
+    if not session or not session.isalnum():
+        raise ApiError(400, "invalid_input", "session_id مطلوب.")
+    _sfu_call(f"/sessions/{session}/renegotiate",
+              {"sessionDescription": answer}, method="PUT")
+    return jsonify({"ok": True})
 
 
 @api.post("/rooms/<code>/rematch")
