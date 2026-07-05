@@ -85,6 +85,24 @@ def test_external_tag_without_claim_is_untagged():
     assert cleaned["arguments"][0]["premises"][0]["external"] is False
 
 
+def test_wrong_segment_citation_is_rewritten_from_the_quote():
+    # Model quoted segment t1-01's words but cited t1-00: the stored ids must
+    # follow the TEXT (they double as the audio-proof playback window).
+    arg = _arg(["t1-00"], "لأن جودة الإنترنت تتفاوت بين البيوت")
+    cleaned = validate_extraction({"arguments": [arg], "unsupported_assertions": [],
+                                   "orphan_premises": []}, _room(), "a")
+    assert cleaned["arguments"][0]["conclusion"]["segment_ids"] == ["t1-01"]
+
+
+def test_wrong_turn_citation_is_rescued_by_text_search():
+    # Cited A's later turn, but the quote lives in t1: recovered, not dropped.
+    arg = _arg(["t3-00"], "التعليم عن بعد يوسع الفجوة بين الطلاب")
+    cleaned = validate_extraction({"arguments": [arg], "unsupported_assertions": [],
+                                   "orphan_premises": []}, _room(), "a")
+    c = cleaned["arguments"][0]["conclusion"]
+    assert c["turn"] == "t1" and c["segment_ids"] == ["t1-00"]
+
+
 def test_cap_and_single_primary_normalization():
     args = [_arg(["t1-00"], "التعليم عن بعد يوسع الفجوة بين الطلاب", weight="primary")
             for _ in range(5)]

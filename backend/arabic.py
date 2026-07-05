@@ -45,21 +45,24 @@ def tokens(text: str) -> list:
 FUZZY_THRESHOLD = 0.80
 
 
-def find_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
-    """Anchor `quote` in a turn's segments -> (first_seg_i, last_seg_i) or None.
+def token_stream(segments: list) -> list:
+    """A turn's segments -> [(normalized_token, segment_i)] in speech order."""
+    return [(tok, seg["i"]) for seg in segments
+            for tok in tokens(seg.get("text", ""))]
+
+
+def find_token_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
+    """Anchor `quote` in a turn's token stream -> (tok_start, tok_end_excl).
 
     Exact: the normalized quote tokens appear as a contiguous sublist of the
     turn's token stream. Fuzzy: best same-length window with SequenceMatcher
     ratio >= FUZZY_THRESHOLD (transcriber and judge may disagree on a particle
     or two). Below threshold -> None, never an estimate.
     """
-    q = [t for s in [quote] for t in tokens(s)]
+    q = tokens(quote)
     if not q:
         return None
-    stream = []  # (token, segment_i)
-    for seg in segments:
-        for tok in tokens(seg.get("text", "")):
-            stream.append((tok, seg["i"]))
+    stream = token_stream(segments)
     if not stream:
         return None
     toks = [t for t, _ in stream]
@@ -67,7 +70,7 @@ def find_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
 
     for start in range(n - m + 1):  # exact contiguous match
         if toks[start:start + m] == q:
-            return stream[start][1], stream[start + m - 1][1]
+            return start, start + m
 
     best_ratio, best_start = 0.0, -1
     for start in range(max(1, n - m + 1)):
@@ -76,9 +79,17 @@ def find_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
         if ratio > best_ratio:
             best_ratio, best_start = ratio, start
     if best_ratio >= FUZZY_THRESHOLD and best_start >= 0:
-        end = min(best_start + m - 1, n - 1)
-        return stream[best_start][1], stream[end][1]
+        return best_start, min(best_start + m, n)
     return None
+
+
+def find_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
+    """Anchor `quote` in a turn's segments -> (first_seg_i, last_seg_i) or None."""
+    hit = find_token_span(quote, segments)
+    if hit is None:
+        return None
+    stream = token_stream(segments)
+    return stream[hit[0]][1], stream[hit[1] - 1][1]
 
 
 def strip_names(text: str, names: list) -> str:

@@ -29,7 +29,7 @@ from typing import Optional
 
 from . import config
 from . import state as S
-from .arabic import strip_names
+from .arabic import find_token_span, strip_names, token_stream
 from .extraction import (ExtractionError, resolve_rebuts, run_extraction,
                          _side_spaces, _validate_quoted)
 from .gemini import GeminiError, generate_json
@@ -42,16 +42,18 @@ from .store import get_store
 
 log = logging.getLogger("hakam.judge")
 
-# Audio-proof timing. Transcript timestamps are model output at whole-second
-# MM:SS granularity (± drift on top) — never precise enough to cut a quote on.
-# Anchors therefore snap to the MEASURED speech boundaries from upload-time
-# silencedetect (audio_stats.silences): a quote should start at the speech
-# onset after a pause and end at the speech offset before one.
-SNAP_WINDOW_S = 1.2       # how far a model timestamp may be pulled to a boundary
-PREROLL_S = 0.25          # after snapping: pads sit INSIDE the adjacent pause
+# Audio-proof timing. Segment TEXT is reliable (verbatim-validated) but model
+# segment TIMES are quantized buckets — observed in production as uniform
+# 5s/15s blocks whose tail drifts 3-6s (room DTDF3C crammed a ten-word closing
+# sentence into 0.48s). Anchors therefore never trust model times when
+# measurements exist: the quote's tokens are aligned char-proportionally over
+# the MEASURED speech time (duration minus silencedetect pauses), and both
+# bounds snap OUTWARD to the containing speech chunk's edges.
+CHUNK_SNAP_S = 1.75       # est. bound this close to its chunk edge -> adopt the edge
+PREROLL_S = 0.25          # snapped-edge pads sit INSIDE the adjacent pause
 POSTROLL_S = 0.35
-UNSNAPPED_PREROLL_S = 0.8   # no boundary found near the model time (continuous
-UNSNAPPED_POSTROLL_S = 0.8  # speech): pad wider — bias early, late starts break trust
+UNSNAPPED_PREROLL_S = 0.9   # bound deep inside continuous speech: pad wider for
+UNSNAPPED_POSTROLL_S = 1.2  # rate-variation slack — a cut quote breaks trust
 LEGACY_PREROLL_S = 1.5    # no silence data at all (turns uploaded pre-snapping)
 LEGACY_POSTROLL_S = 1.0
 
@@ -541,27 +543,86 @@ def _axes_lean(axes_scores: dict) -> Optional[str]:
     return "a" if tot["a"] > tot["b"] else "b"
 
 
-def _snap_to_boundary(t: float, silences: list, edge: str) -> "tuple[float, bool]":
-    """(snapped time, whether a measured boundary was found).
-
-    edge='start' wants a speech ONSET (the end of a quiet interval); edge='end'
-    wants a speech OFFSET (the start of one). A model time landing INSIDE a
-    pause is clamped to that pause's speech-side edge outright — the quoted
-    words cannot live in silence.
-    """
-    best = None
-    for s, e in silences or []:
-        if s <= t <= e:
-            return (e, True) if edge == "start" else (s, True)
-        cand = e if edge == "start" else s
-        if abs(cand - t) <= SNAP_WINDOW_S and (best is None or abs(cand - t) < abs(best - t)):
-            best = cand
-    return (best, True) if best is not None else (t, False)
+def _speech_chunks(duration: float, silences: list) -> list:
+    """Measured silence intervals -> [(start, end)] speech intervals."""
+    chunks, t = [], 0.0
+    for s, e in silences:
+        if s > t:
+            chunks.append((t, s))
+        t = max(t, e)
+    if t < duration:
+        chunks.append((t, duration))
+    return chunks or [(0.0, duration)]
 
 
-def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
-    """Playback window for validated segment ids (single turn), snapped to the
-    measured speech boundaries so the quote starts exactly where the words do."""
+def _speech_to_wall(offset: float, chunks: list) -> float:
+    """Offset into cumulative speech time -> wall-clock time."""
+    for s, e in chunks:
+        if offset <= e - s:
+            return s + offset
+        offset -= e - s
+    return chunks[-1][1]
+
+
+def _snap_outward(t: float, chunks: list, edge: str) -> "tuple[float, bool]":
+    """Expand an estimated bound to its speech chunk's edge when close enough.
+    Only ever OUTWARD (start earlier / end later): snapping may add a breath
+    of context but must never cut quoted words. A bound landing in a pause
+    clamps to the speech-side edge — quoted words cannot live in silence."""
+    if edge == "start":
+        for s, e in chunks:
+            if s <= t < e:
+                return (s, True) if t - s <= CHUNK_SNAP_S else (t, False)
+        nxt = [s for s, _ in chunks if s >= t]
+        return (min(nxt), True) if nxt else (t, False)
+    for s, e in chunks:
+        if s < t <= e:
+            return (e, True) if e - t <= CHUNK_SNAP_S else (t, False)
+    prev = [e for _, e in chunks if e <= t]
+    return (max(prev), True) if prev else (t, False)
+
+
+def _aligned_bounds(all_segs: list, idx: set, quote: Optional[str],
+                    chunks: list) -> Optional["tuple[float, float]"]:
+    """Char-proportional alignment of the quoted tokens over measured speech.
+
+    The turn's token stream is assumed spoken at a uniform char rate over the
+    SPEECH time (wall clock minus measured pauses) — the only timing authority
+    here is the measurement; model segment times never enter. The quote's own
+    tokens are located when a quote is given (fine-grained window); otherwise
+    the cited segments' token range is used (key moment)."""
+    stream = token_stream(all_segs)
+    if not stream:
+        return None
+    lo = hi = None
+    if quote:
+        hit = find_token_span(quote, all_segs)
+        if hit is not None:
+            lo, hi = hit
+    if lo is None:
+        in_cited = [k for k, (_, seg_i) in enumerate(stream) if seg_i in idx]
+        if not in_cited:
+            return None
+        lo, hi = in_cited[0], in_cited[-1] + 1
+    weights = [len(t) + 1 for t, _ in stream]  # +1 ≈ the inter-word gap
+    total = float(sum(weights))
+    speech_total = sum(e - s for s, e in chunks)
+    start_est = _speech_to_wall(sum(weights[:lo]) / total * speech_total, chunks)
+    end_est = _speech_to_wall(sum(weights[:hi]) / total * speech_total, chunks)
+    start, s_hit = _snap_outward(start_est, chunks, "start")
+    end, e_hit = _snap_outward(end_est, chunks, "end")
+    start -= PREROLL_S if s_hit else UNSNAPPED_PREROLL_S
+    end += POSTROLL_S if e_hit else UNSNAPPED_POSTROLL_S
+    return start, end
+
+
+def _anchor(room: dict, segment_ids: list, quote: Optional[str] = None) -> Optional[dict]:
+    """Playback window for a validated citation (single turn).
+
+    Model segment TIMES are quantized fiction (see the constants block), so
+    whenever the upload's silence measurements exist the window comes from
+    _aligned_bounds; model times survive only for turns measured before
+    silence capture existed."""
     if not segment_ids:
         return None
     tid = segment_ids[0].split("-")[0]
@@ -569,26 +630,22 @@ def _anchor(room: dict, segment_ids: list) -> Optional[dict]:
     if info is None:
         return None
     idx = {int(s.split("-")[1]) for s in segment_ids}
-    segs = [s for s in _segments_ok(info["entry"]) if s["i"] in idx]
+    all_segs = _segments_ok(info["entry"])
+    segs = [s for s in all_segs if s["i"] in idx]
     if not segs:
         return None
-    duration = info["entry"].get("duration_s") or segs[-1]["end_s"]
-    raw_start = min(s["start_s"] for s in segs)
-    raw_end = max(s["end_s"] for s in segs)
+    duration = info["entry"].get("duration_s") or all_segs[-1]["end_s"]
 
     stored = (info["entry"].get("audio_stats") or {}).get("silences")
-    if stored is None:  # pre-snapping upload: coarse times, keep wide pads
-        start, end = raw_start - LEGACY_PREROLL_S, raw_end + LEGACY_POSTROLL_S
-    else:
-        # Stored as {s, e} maps (Firestore forbids nested arrays); snap on pairs.
-        silences = [(iv["s"], iv["e"]) for iv in stored]
-        start, s_hit = _snap_to_boundary(raw_start, silences, "start")
-        end, e_hit = _snap_to_boundary(raw_end, silences, "end")
-        if end - start < 0.4:  # snapped into a sliver/inversion — trust raw span
-            start, end = raw_start, raw_end
-            s_hit = e_hit = False
-        start -= PREROLL_S if s_hit else UNSNAPPED_PREROLL_S
-        end += POSTROLL_S if e_hit else UNSNAPPED_POSTROLL_S
+    bounds = None
+    if stored is not None:
+        # Stored as {s, e} maps (Firestore forbids nested arrays).
+        chunks = _speech_chunks(duration, [(iv["s"], iv["e"]) for iv in stored])
+        bounds = _aligned_bounds(all_segs, idx, quote, chunks)
+    if bounds is None:  # pre-measurement upload: model times, wide pads
+        bounds = (min(s["start_s"] for s in segs) - LEGACY_PREROLL_S,
+                  max(s["end_s"] for s in segs) + LEGACY_POSTROLL_S)
+    start, end = bounds
 
     return {"turn": info["entry"]["turn"],
             "start_s": round(max(0.0, start), 2),
@@ -746,11 +803,12 @@ def _display_map(room: dict, maps: dict, arg_results: dict) -> dict:
                 "verdict": r["verdict"],
                 "failure_point_ar": _deanonymize_display(r["failure_point_ar"], room),
                 "conclusion": {"quote": arg["conclusion"]["quote"],
-                               "audio": _anchor(room, arg["conclusion"]["segment_ids"])},
+                               "audio": _anchor(room, arg["conclusion"]["segment_ids"],
+                                                arg["conclusion"]["quote"])},
                 "premises": [
                     {"quote": p["quote"], "external": p["external"],
                      "external_claim_ar": p["external_claim_ar"],
-                     "audio": _anchor(room, p["segment_ids"])}
+                     "audio": _anchor(room, p["segment_ids"], p["quote"])}
                     for p in arg["premises"]
                 ],
                 "implicit_premises": [{"text_ar": ip["text_ar"]}
@@ -763,10 +821,10 @@ def _display_map(room: dict, maps: dict, arg_results: dict) -> dict:
         out[side] = {
             "arguments": args,
             "unsupported_assertions": [
-                {"quote": u["quote"], "audio": _anchor(room, u["segment_ids"])}
+                {"quote": u["quote"], "audio": _anchor(room, u["segment_ids"], u["quote"])}
                 for u in maps[side]["unsupported_assertions"]],
             "orphan_premises": [
-                {"quote": o["quote"], "audio": _anchor(room, o["segment_ids"])}
+                {"quote": o["quote"], "audio": _anchor(room, o["segment_ids"], o["quote"])}
                 for o in maps[side]["orphan_premises"]],
         }
     return out
@@ -872,7 +930,7 @@ def build_verdict(room: dict) -> dict:
                                            "segment_ids", "severity", "argument_id")},
                       "name_ar": name_ar, "name_en": name_en,
                       "explanation_ar": _deanonymize_display(f["explanation_ar"], room),
-                      "audio": _anchor(room, f["segment_ids"])})
+                      "audio": _anchor(room, f["segment_ids"], f["quote"])})
     seen = {"a": 0, "b": 0}
     capped = []
     for c in cards:
@@ -885,7 +943,7 @@ def build_verdict(room: dict) -> dict:
         "speaker": s["speaker"], "type": s["type"],
         "name_ar": SOUNDNESS_NAMES[s["type"]], "argument_id": s.get("argument_id"),
         "explanation_ar": _deanonymize_display(s["explanation_ar"], room),
-        "quotes": [{"quote": q["quote"], "audio": _anchor(room, q["segment_ids"])}
+        "quotes": [{"quote": q["quote"], "audio": _anchor(room, q["segment_ids"], q["quote"])}
                    for q in s["quotes"]],
     } for s in soundness]
 

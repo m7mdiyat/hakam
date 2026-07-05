@@ -71,19 +71,29 @@ def _side_spaces(room: dict) -> dict:
 
 
 def _validate_quoted(item: dict, space: dict) -> Optional[dict]:
-    """A quoted unit is valid iff its ids live in ONE target-owned turn and the
-    quote anchors in that turn's segments. Returns {quote, segment_ids, turn}."""
+    """A quoted unit is valid iff the quote anchors inside ONE target-owned
+    turn. The model's cited ids only pick which turn to search first: the
+    STORED ids are re-derived from where the quote text actually matched.
+    Models routinely cite a neighbouring segment, and segment ids double as
+    the playback window, so a trusted-but-wrong citation plays the wrong
+    audio. The text is the authority. Returns {quote, segment_ids, turn}."""
+    from .judge import _seg_id
     quote = (item.get("quote") or "").strip()
-    ids = [i for i in (item.get("segment_ids") or []) if i in space["ids"]]
-    if not quote or not ids:
+    if not quote:
         return None
-    tids = {_turn_of(i) for i in ids}
-    if len(tids) != 1:
-        return None
-    tid = tids.pop()
-    if find_span(quote, space["by_tid"].get(tid, [])) is None:
-        return None
-    return {"quote": quote, "segment_ids": sorted(ids, key=_seg_order), "turn": tid}
+    cited_tids = {_turn_of(i) for i in (item.get("segment_ids") or [])
+                  if i in space["ids"]}
+    search = [t for t in space["by_tid"] if t in cited_tids]
+    search += [t for t in space["by_tid"] if t not in cited_tids]
+    for tid in search:
+        segs = space["by_tid"][tid]
+        span = find_span(quote, segs)
+        if span is None:
+            continue
+        first, last = span
+        ids = [_seg_id(tid, s["i"]) for s in segs if first <= s["i"] <= last]
+        return {"quote": quote, "segment_ids": ids, "turn": tid}
+    return None
 
 
 # --------------------------------------------------------------------------

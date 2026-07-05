@@ -77,9 +77,16 @@ export function createProofPlayer(code, token, onChange) {
         if (my !== seq) return;
       }
       stopAt = null;                             // old bound must not cut the new clip
-      audio.currentTime = Math.max(0, start || 0);
+      const target = Math.max(0, start || 0);
+      audio.currentTime = target;
       await waitFor('seeked', 400);
       if (my !== seq) return;
+      if (Math.abs(audio.currentTime - target) > 0.75) {
+        // The 400ms wait resolved by timeout with the seek still in flight —
+        // playing now would emit the wrong words. One more grace period.
+        await waitFor('seeked', 600);
+        if (my !== seq) return;
+      }
       stopAt = end != null ? end : null;
       await audio.play();
       if (my !== seq) { audio.pause(); return; }
