@@ -413,15 +413,18 @@ export function mountDebate(root, ctx) {
       const nm = state.debaters[side].name || '';
       if (ringEl) ringEl.setAttribute('stroke', col);
       turnLabel.style.color = col;
-      if (state.processing) {
-        // Between turns: the previous turn's transcript is being produced.
-        // No clock runs against anyone — full ring, pulsing, no countdown.
+      if (state.processing || uploading) {
+        // Between turns (transcript being produced) — or our OWN submit still
+        // in flight: the server doesn't know about the upload yet and reports
+        // the turn as live, so without the `uploading` guard the 2s poll
+        // repaints a draining ring right over showSubmitHold(). The debater
+        // already spoke; the clock must read as stopped.
         anchor = null;
         prep = null;
         clockEl.textContent = '—';
         if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');
         ringWrap.classList.add('ring-hold');
-        turnLabel.textContent = 'يدوّن الحَكَم الجولة…';
+        turnLabel.textContent = uploading ? 'جارٍ إرسال التسجيل…' : 'يدوّن الحَكَم الجولة…';
         turnLabel.style.color = 'var(--muted)';
       } else if (state.turn_deadline_at) {
         ringWrap.classList.remove('ring-hold');
