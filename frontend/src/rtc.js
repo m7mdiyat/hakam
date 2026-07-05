@@ -46,35 +46,68 @@ export function createLiveLink({ code, token, side, onStatus }) {
     if (onStatus) onStatus({ state: linkState(), peerMuted, selfMuted, needsGesture });
   };
 
-  function ensureAudioEl() {
+  // --- audio output: WebAudio graph, not a plain <audio> element ------------
+  // Autoplay policy blocks an UNMUTED element's play() outside a gesture (the
+  // yellow-button problem), but a MUTED element always plays — and browsers
+  // only pull WebRTC audio for a stream some media element is consuming. So:
+  // a muted sink element keeps the RTP flowing, while an AudioContext
+  // (resumable by ANY prior tap/keypress — debaters must tap «أنا جاهز» and
+  // the mic orb anyway) produces the actual sound. In practice the explicit
+  // enable pill never needs to appear.
+  let audioCtx = null;
+  let gainNode = null;
+  let srcNode = null;
+  let remoteStream = null;
+
+  function ensureGraph() {
+    if (audioCtx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    audioCtx = new AC();
+    gainNode = audioCtx.createGain();
+    gainNode.connect(audioCtx.destination);
+    return true;
+  }
+  ensureGraph();   // created now: any later gesture can resume it
+
+  async function kickAudio() {
+    if (destroyed) return;
+    if (audioEl && audioEl.paused) audioEl.play().catch(() => { /* muted sink */ });
+    if (audioCtx && audioCtx.state === 'suspended') {
+      try { await audioCtx.resume(); } catch { /* needs a gesture */ }
+    }
+    // Only ask for a tap when there is actually something to hear.
+    needsGesture = !!remoteStream && !!audioCtx && audioCtx.state !== 'running';
+    emit();
+  }
+
+  function attachRemote(stream) {
+    remoteStream = stream;
     if (!audioEl) {
       audioEl = document.createElement('audio');
       audioEl.autoplay = true;
       audioEl.setAttribute('playsinline', '');
-      audioEl.muted = peerMuted;
+      audioEl.muted = !!audioCtx;   // sink-only when the graph does the sound
       document.body.appendChild(audioEl);
     }
-    return audioEl;
-  }
-
-  async function tryPlay() {
-    if (!audioEl || destroyed) return;
-    try {
-      await audioEl.play();
-      needsGesture = false;
-    } catch {
-      needsGesture = true;   // iOS autoplay policy: a user gesture unlocks it
+    audioEl.srcObject = stream;
+    audioEl.play().catch(() => { /* retried by kickAudio */ });
+    if (audioCtx) {
+      if (srcNode) { try { srcNode.disconnect(); } catch { /* re-attach */ } }
+      srcNode = audioCtx.createMediaStreamSource(stream);
+      srcNode.connect(gainNode);
+      gainNode.gain.value = peerMuted ? 0 : 1;
+    } else {
+      audioEl.muted = peerMuted;    // ancient-browser fallback: element audio
     }
-    emit();
+    kickAudio();
   }
 
-  // iOS refuses play() outside a user gesture — but debaters tap constantly
-  // (the mic orb, ready, finish). Any tap silently unlocks the blocked audio,
-  // so the explicit «تفعيل الصوت» pill is only a fallback.
-  const gestureKick = () => {
-    if (audioEl && audioEl.paused && !peerMuted) tryPlay();
-  };
-  document.addEventListener('click', gestureKick, true);
+  // Any interaction resumes blocked audio — mouse, touch, or keyboard (the
+  // desktop listener may never click but will type/press keys).
+  const gestureKick = () => { kickAudio(); };
+  document.addEventListener('pointerdown', gestureKick, true);
+  document.addEventListener('keydown', gestureKick, true);
 
   async function newPc() {
     if (!iceServers) {
@@ -87,15 +120,13 @@ export function createLiveLink({ code, token, side, onStatus }) {
     sender = tr.sender;
     if (micTrack && !selfMuted) sender.replaceTrack(micTrack).catch(() => {});
     p.ontrack = (e) => {
-      ensureAudioEl().srcObject = e.streams[0] || new MediaStream([e.track]);
-      // Re-kick playback when RTP actually starts flowing (the element may
-      // have been playing dead air, or a paused play() needs a retry).
-      e.track.addEventListener('unmute', tryPlay);
-      tryPlay();
+      attachRemote(e.streams[0] || new MediaStream([e.track]));
+      // Re-kick when RTP actually starts flowing (dead air until then).
+      e.track.addEventListener('unmute', kickAudio);
     };
     p.onconnectionstatechange = () => {
       emit();
-      if (p.connectionState === 'connected') tryPlay();
+      if (p.connectionState === 'connected') kickAudio();
       else if (p.connectionState === 'failed') scheduleRestart(2000);
       else if (p.connectionState === 'disconnected') scheduleRestart(5000);
     };
@@ -208,24 +239,26 @@ export function createLiveLink({ code, token, side, onStatus }) {
     emit();
   }
 
-  // Their voice on MY speaker (pure local playback mute).
+  // Their voice on MY speaker (pure local playback mute — a gain of zero).
   function setPeerMuted(m) {
     peerMuted = m;
-    if (audioEl) audioEl.muted = m;
-    if (!m) tryPlay();
+    if (audioCtx && gainNode) gainNode.gain.value = m ? 0 : 1;
+    else if (audioEl) audioEl.muted = m;
+    if (!m) kickAudio();
     emit();
   }
 
   function resumeAudio() {  // the explicit «تفعيل الصوت» fallback pill
-    ensureAudioEl();
-    tryPlay();
+    kickAudio();
   }
 
   function destroy() {
     destroyed = true;
-    document.removeEventListener('click', gestureKick, true);
+    document.removeEventListener('pointerdown', gestureKick, true);
+    document.removeEventListener('keydown', gestureKick, true);
     if (restartTimer) clearTimeout(restartTimer);
     if (pc) { try { pc.close(); } catch { /* closing */ } }
+    if (audioCtx) { try { audioCtx.close(); } catch { /* closing */ } }
     if (audioEl) {
       try { audioEl.srcObject = null; audioEl.remove(); } catch { /* gone */ }
     }

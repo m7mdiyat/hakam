@@ -102,20 +102,29 @@ export function mountDebate(root, ctx) {
   // poll re-renders everything around them, and the mute states must survive.
   // Two distinct pills: mic = MY voice on their speaker, speaker = THEIR
   // voice on mine. Green = flowing, red = muted.
-  function renderLive({ state, peerMuted, selfMuted, needsGesture }) {
+  // Turn-aware: the SPEAKER only ever sees «صوتي …» (mute yourself), the
+  // LISTENER only «أسمع الخصم / الخصم مكتوم» — one relevant control at a time.
+  let lastLiveStatus = { state: 'idle', peerMuted: false, selfMuted: false, needsGesture: false };
+  function renderLive(status) {
+    if (status) lastLiveStatus = status;
     const row = root.querySelector('[data-live]');
     if (!row) return;
+    const { state, peerMuted, selfMuted, needsGesture } = lastLiveStatus;
     row.hidden = state === 'idle';
     const dot = root.querySelector('[data-live-dot]');
     dot.className = `live-dot${state === 'connected' ? ' on' : state === 'failed' ? ' err' : ' busy'}`;
     root.querySelector('[data-live-status]').textContent =
       state === 'connecting' ? 'جارٍ الاتصال…'
         : state === 'failed' ? 'تعذّر الاتصال المباشر' : '';
+    const ct = lastState && lastState.current_turn;
+    const turnSide = ct ? sideOf(ct) : null;
     const selfPill = root.querySelector('[data-live-self]');
+    selfPill.hidden = turnSide !== mine;               // my turn only
     selfPill.classList.toggle('is-off', selfMuted);
     root.querySelector('[data-live-self-ico]').innerHTML = selfMuted ? micOff(15) : micIcon(15, 'currentColor', 1.8);
     root.querySelector('[data-live-self-txt]').textContent = selfMuted ? 'صوتي مكتوم' : 'صوتي مسموع';
     const peerPill = root.querySelector('[data-live-peer]');
+    peerPill.hidden = !turnSide || turnSide === mine;  // opponent's turn only
     peerPill.classList.toggle('is-off', peerMuted);
     root.querySelector('[data-live-peer-ico]').innerHTML = peerMuted ? volumeOff(15) : volume(15);
     root.querySelector('[data-live-peer-txt]').textContent = peerMuted ? 'الخصم مكتوم' : 'أسمع الخصم';
@@ -125,7 +134,7 @@ export function mountDebate(root, ctx) {
     ? createLiveLink({ code, token, side: mine, onStatus: renderLive })
     : null;
   if (live) {
-    renderLive({ state: 'idle', peerMuted: false, selfMuted: false, needsGesture: false });
+    renderLive(lastLiveStatus);
     root.querySelector('[data-live-self]').addEventListener('click', () => {
       live.setSelfMuted(!live.selfMuted);
     });
@@ -550,6 +559,7 @@ export function mountDebate(root, ctx) {
     renderDots(state);
     renderTurns(state);
     refreshMic();
+    if (live) renderLive();   // pill visibility follows whose turn it is
     root.querySelector('[data-spectators]').innerHTML =
       spectatorsHtml(state, { shareCode: code });
 
