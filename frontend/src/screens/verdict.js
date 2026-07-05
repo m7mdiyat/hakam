@@ -594,25 +594,41 @@ export function mountVerdict(root, ctx) {
         ).catch(() => toast('تعذّر تشغيل التسجيل'));
       }
     });
+    let shareUrl = null;  // minted once (idempotent server-side), then cached
     root.querySelector('[data-share]').addEventListener('click', async (e) => {
       const text = shareText(state, state.verdict);
-      // Debaters mint the public 7-day snapshot link (idempotent server-side);
-      // spectators can't create it, and a failed snapshot degrades to text.
-      let url = null;
-      if (!spectator) {
-        e.target.disabled = true;
+      const btn = e.currentTarget;
+      // Debaters mint the public 7-day snapshot link; spectators can't.
+      // Failures must be VISIBLE — a silent downgrade to text-only reads as
+      // «the feature doesn't work».
+      if (!spectator && !shareUrl) {
+        btn.disabled = true;
         try {
-          url = `${location.origin}/v/${(await api.shareVerdict(code, token)).share_id}`;
-        } catch { /* text-only fallback */ }
-        e.target.disabled = false;
-      }
-      try {
-        if (navigator.share) await navigator.share(url ? { text, url } : { text });
-        else {
-          await navigator.clipboard.writeText(url ? `${text}\n${url}` : text);
-          toast(url ? 'نُسخ الحُكْم مع رابط مشاهدته (صالح ٧ أيام)' : 'نُسخ الحُكْم');
+          shareUrl = `${location.origin}/v/${(await api.shareVerdict(code, token)).share_id}`;
+        } catch {
+          toast('تعذّر إنشاء رابط المشاهدة — سيُنسخ النص فقط');
         }
-      } catch { /* share sheet dismissed */ }
+        btn.disabled = false;
+      }
+      const payload = shareUrl ? `${text}\n${shareUrl}` : text;
+      try {
+        if (navigator.share) await navigator.share(shareUrl ? { text, url: shareUrl } : { text });
+        else {
+          await navigator.clipboard.writeText(payload);
+          toast(shareUrl ? 'نُسخ الحُكْم مع رابط مشاهدته (صالح ٧ أيام)' : 'نُسخ الحُكْم');
+        }
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;  // sheet dismissed by user
+        // Safari can void the tap's activation while the mint was awaited —
+        // try the clipboard now; if that's blocked too, the NEXT tap has the
+        // cached url and runs gesture-clean.
+        try {
+          await navigator.clipboard.writeText(payload);
+          toast(shareUrl ? 'نُسخ الحُكْم مع رابط مشاهدته (صالح ٧ أيام)' : 'نُسخ الحُكْم');
+        } catch {
+          toast('اضغط «شارك الحُكْم» مرة أخرى للمشاركة');
+        }
+      }
     });
     const rematchBtn = root.querySelector('[data-rematch]');
     if (rematchBtn) {
