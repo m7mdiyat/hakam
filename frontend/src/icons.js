@@ -14,6 +14,19 @@ export const mic = (size = 34, stroke = 'var(--teal)', sw = 1.8) => svg(size, st
   '<path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>' +
   '<path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v4"/>');
 
+export const micOff = (size = 15, stroke = 'currentColor', sw = 1.8) => svg(size, stroke, sw,
+  '<path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>' +
+  '<path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v4"/>' +
+  '<line x1="4" y1="4" x2="20" y2="20"/>');
+
+export const volume = (size = 15, stroke = 'currentColor', sw = 1.8) => svg(size, stroke, sw,
+  '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' +
+  '<path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 6a9 9 0 0 1 0 12"/>');
+
+export const volumeOff = (size = 15, stroke = 'currentColor', sw = 1.8) => svg(size, stroke, sw,
+  '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' +
+  '<line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/>');
+
 export const copy = (size = 18, stroke = 'var(--gold)', sw = 1.6) => svg(size, stroke, sw,
   '<rect x="9" y="9" width="12" height="12" rx="2.5"/>' +
   '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>');

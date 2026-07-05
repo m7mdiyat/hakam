@@ -1,5 +1,5 @@
 import { header, spectatorsHtml, wireSpectatorShare } from '../components.js';
-import { mic as micIcon, ring, CIRC, play as playIcon, stop as stopIcon } from '../icons.js';
+import { mic as micIcon, micOff, volume, volumeOff, ring, CIRC, play as playIcon, stop as stopIcon } from '../icons.js';
 import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
 import { toast } from '../components.js';
@@ -31,9 +31,17 @@ export function mountDebate(root, ctx) {
       ${spectator ? '' : `
       <div class="live-row" data-live hidden>
         <span class="live-dot" data-live-dot></span>
-        <span class="micro-2">الصوت المباشر</span>
-        <button class="live-btn" data-live-mute type="button">كتم</button>
-        <button class="live-btn live-enable" data-live-enable type="button" hidden>تفعيل الصوت المباشر</button>
+        <span class="live-status" data-live-status></span>
+        <button class="live-pill" data-live-self type="button"
+          title="بث صوتك المباشر للخصم — كتمه لا يؤثر على تسجيل جولتك">
+          <span class="live-ico" data-live-self-ico></span><span data-live-self-txt></span>
+        </button>
+        <button class="live-pill" data-live-peer type="button"
+          title="سماع صوت الخصم المباشر عندك">
+          <span class="live-ico" data-live-peer-ico></span><span data-live-peer-txt></span>
+        </button>
+        <button class="live-pill live-enable" data-live-enable type="button" hidden>
+          <span class="live-ico">${volume(15)}</span>تفعيل الصوت المباشر</button>
       </div>`}
 
       <div class="timer">
@@ -91,23 +99,38 @@ export function mountDebate(root, ctx) {
 
   // --- live walkie-talkie link (participants only; strictly additive) -----
   // The controls live in their own container rendered ONCE at mount — the
-  // poll re-renders everything around them, and the mute state must survive.
+  // poll re-renders everything around them, and the mute states must survive.
+  // Two distinct pills: mic = MY voice on their speaker, speaker = THEIR
+  // voice on mine. Green = flowing, red = muted.
+  function renderLive({ state, peerMuted, selfMuted, needsGesture }) {
+    const row = root.querySelector('[data-live]');
+    if (!row) return;
+    row.hidden = state === 'idle';
+    const dot = root.querySelector('[data-live-dot]');
+    dot.className = `live-dot${state === 'connected' ? ' on' : state === 'failed' ? ' err' : ' busy'}`;
+    root.querySelector('[data-live-status]').textContent =
+      state === 'connecting' ? 'جارٍ الاتصال…'
+        : state === 'failed' ? 'تعذّر الاتصال المباشر' : '';
+    const selfPill = root.querySelector('[data-live-self]');
+    selfPill.classList.toggle('is-off', selfMuted);
+    root.querySelector('[data-live-self-ico]').innerHTML = selfMuted ? micOff(15) : micIcon(15, 'currentColor', 1.8);
+    root.querySelector('[data-live-self-txt]').textContent = selfMuted ? 'صوتي مكتوم' : 'صوتي مسموع';
+    const peerPill = root.querySelector('[data-live-peer]');
+    peerPill.classList.toggle('is-off', peerMuted);
+    root.querySelector('[data-live-peer-ico]').innerHTML = peerMuted ? volumeOff(15) : volume(15);
+    root.querySelector('[data-live-peer-txt]').textContent = peerMuted ? 'الخصم مكتوم' : 'أسمع الخصم';
+    root.querySelector('[data-live-enable]').hidden = !needsGesture;
+  }
   const live = (!spectator && typeof RTCPeerConnection !== 'undefined')
-    ? createLiveLink({
-      code, token, side: mine,
-      onStatus: ({ connected, muted, needsGesture }) => {
-        const row = root.querySelector('[data-live]');
-        if (!row) return;
-        row.hidden = !(connected || needsGesture);
-        root.querySelector('[data-live-dot]').classList.toggle('on', connected);
-        root.querySelector('[data-live-mute]').textContent = muted ? 'إلغاء الكتم' : 'كتم';
-        root.querySelector('[data-live-enable]').hidden = !needsGesture;
-      },
-    })
+    ? createLiveLink({ code, token, side: mine, onStatus: renderLive })
     : null;
   if (live) {
-    root.querySelector('[data-live-mute]').addEventListener('click', () => {
-      live.setMuted(!live.muted);
+    renderLive({ state: 'idle', peerMuted: false, selfMuted: false, needsGesture: false });
+    root.querySelector('[data-live-self]').addEventListener('click', () => {
+      live.setSelfMuted(!live.selfMuted);
+    });
+    root.querySelector('[data-live-peer]').addEventListener('click', () => {
+      live.setPeerMuted(!live.peerMuted);
     });
     root.querySelector('[data-live-enable]').addEventListener('click', () => {
       live.resumeAudio();
