@@ -23,3 +23,4 @@ gcp-*.json
 
 # Design decode scratch
 _decoded_*
+deploy-turn.sh

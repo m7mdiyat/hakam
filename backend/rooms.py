@@ -435,6 +435,7 @@ def _fetch_turn_servers():
     if not (config.TURN_KEY_ID and config.TURN_API_TOKEN):
         return None
     import json as _json
+    import logging as _logging
     from urllib import request as _rq
     try:
         req = _rq.Request(
@@ -442,7 +443,10 @@ def _fetch_turn_servers():
             f"{config.TURN_KEY_ID}/credentials/generate-ice-servers",
             data=_json.dumps({"ttl": config.TURN_TTL_SECONDS}).encode(),
             headers={"Authorization": f"Bearer {config.TURN_API_TOKEN}",
-                     "Content-Type": "application/json"},
+                     "Content-Type": "application/json",
+                     # Cloudflare's WAF 403s (error 1010) the default
+                     # Python-urllib UA — a real product UA is required.
+                     "User-Agent": "hakam/1.0 (+https://thehakam.com)"},
             method="POST")
         with _rq.urlopen(req, timeout=5) as resp:
             data = _json.loads(resp.read().decode())
@@ -450,7 +454,10 @@ def _fetch_turn_servers():
         if isinstance(servers, dict):
             servers = [servers]
         return servers if isinstance(servers, list) and servers else None
-    except Exception:
+    except Exception as e:
+        # Degrading to STUN-only is the designed fallback, but it must be
+        # LOUD in logs — a silent 403 hid a dead relay for a whole debug cycle.
+        _logging.getLogger("hakam.rtc").warning("TURN mint failed: %s", e)
         return None
 
 
