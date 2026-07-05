@@ -54,6 +54,8 @@ PREROLL_S = 0.25          # snapped-edge pads sit INSIDE the adjacent pause
 POSTROLL_S = 0.35
 UNSNAPPED_PREROLL_S = 0.9   # bound deep inside continuous speech: pad wider for
 UNSNAPPED_POSTROLL_S = 1.2  # rate-variation slack — a cut quote breaks trust
+MIN_CLIP_WINDOW_S = 3.6   # short quotes: the ±1-2s alignment error must fit INSIDE
+                          # the window, else the clip plays neighbouring words
 LEGACY_PREROLL_S = 1.5    # no silence data at all (turns uploaded pre-snapping)
 LEGACY_POSTROLL_S = 1.0
 
@@ -697,7 +699,8 @@ def _aligned_bounds(all_segs: list, idx: set, quote: Optional[str],
         return None
     lo = hi = None
     if quote:
-        hit = find_token_span(quote, all_segs)
+        # `idx` (the validated citation) disambiguates repeated short phrases.
+        hit = find_token_span(quote, all_segs, idx or None)
         if hit is not None:
             lo, hi = hit
     if lo is None:
@@ -714,6 +717,19 @@ def _aligned_bounds(all_segs: list, idx: set, quote: Optional[str],
     end, e_hit = _snap_outward(end_est, chunks, "end")
     start -= PREROLL_S if s_hit else UNSNAPPED_PREROLL_S
     end += POSTROLL_S if e_hit else UNSNAPPED_POSTROLL_S
+    # Short quotes carry the alignment's ±1-2s error in a tiny window — the
+    # words can miss the clip entirely. Guarantee a floor by widening the
+    # ESTIMATED sides (a snapped edge is a measured boundary and stays put);
+    # extra context around a receipt is cheap, the wrong words are not.
+    short = MIN_CLIP_WINDOW_S - (end - start)
+    if short > 0 and not (s_hit and e_hit):
+        if s_hit:
+            end += short
+        elif e_hit:
+            start -= short
+        else:
+            start -= short / 2
+            end += short / 2
     return start, end
 
 

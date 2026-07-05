@@ -81,13 +81,17 @@ def _validate_quoted(item: dict, space: dict) -> Optional[dict]:
     quote = (item.get("quote") or "").strip()
     if not quote:
         return None
-    cited_tids = {_turn_of(i) for i in (item.get("segment_ids") or [])
-                  if i in space["ids"]}
+    cited = [i for i in (item.get("segment_ids") or []) if i in space["ids"]]
+    cited_tids = {_turn_of(i) for i in cited}
     search = [t for t in space["by_tid"] if t in cited_tids]
     search += [t for t in space["by_tid"] if t not in cited_tids]
     for tid in search:
         segs = space["by_tid"][tid]
-        span = find_span(quote, segs)
+        # The model's citation disambiguates repeated phrases: a short quote
+        # can occur several times in the turn — anchor the occurrence the
+        # model actually pointed at, not the first one.
+        near = {_seg_order(i)[1] for i in cited if _turn_of(i) == tid}
+        span = find_span(quote, segs, near or None)
         if span is None:
             continue
         first, last = span

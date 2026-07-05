@@ -112,6 +112,29 @@ def test_anchor_deep_in_continuous_speech_keeps_wide_pads():
     assert a["end_s"] == pytest.approx(18.0 + UNSNAPPED_POSTROLL_S)
 
 
+def test_repeated_short_phrase_anchors_the_cited_occurrence():
+    # «سماء قلوب» is said TWICE (early and late). Anchoring the first
+    # occurrence when the judge cited the LATE one played the wrong words —
+    # the citation must disambiguate.
+    words = ["سماء قلوب واحد بحار جمال", "نجوم كتاب قلمي ورقه شمسي",
+             "بحار جمال واحد سماء قلوب"]
+    room = _room({"silences": []}, texts=tuple(words), duration=30.0)
+    early = _anchor(room, ["t1-00"], "سماء قلوب")
+    late = _anchor(room, ["t1-02"], "سماء قلوب")
+    assert late["start_s"] > early["start_s"] + 10  # opposite ends of the turn
+    assert late["end_s"] == pytest.approx(30.0)     # the tail occurrence
+
+
+def test_short_quote_gets_a_minimum_window():
+    # One word deep inside continuous speech: the ±1-2s alignment error must
+    # fit INSIDE the clip, so tiny estimates widen to the floor.
+    words = "واحد بحار جمال سماء قلوب نجوم كتاب قلمي ورقه شمسي".split()
+    room = _room({"silences": []},
+                 texts=(" ".join(words[:5]), " ".join(words[5:])), duration=30.0)
+    a = _anchor(room, ["t1-00"], words[4])
+    assert a["end_s"] - a["start_s"] >= 3.6
+
+
 def test_anchor_without_silence_data_keeps_legacy_model_times():
     # Turns uploaded before silence capture existed (audio_stats None or
     # missing the key): model times with the wide legacy pads are all we have.

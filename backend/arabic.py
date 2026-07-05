@@ -51,26 +51,26 @@ def token_stream(segments: list) -> list:
             for tok in tokens(seg.get("text", ""))]
 
 
-def find_token_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
-    """Anchor `quote` in a turn's token stream -> (tok_start, tok_end_excl).
+def _token_spans(quote: str, segments: list) -> list:
+    """ALL candidate anchors for `quote` -> [(tok_start, tok_end_excl)].
 
-    Exact: the normalized quote tokens appear as a contiguous sublist of the
-    turn's token stream. Fuzzy: best same-length window with SequenceMatcher
-    ratio >= FUZZY_THRESHOLD (transcriber and judge may disagree on a particle
-    or two). Below threshold -> None, never an estimate.
+    Every exact contiguous match; if none, the single best fuzzy window with
+    SequenceMatcher ratio >= FUZZY_THRESHOLD (transcriber and judge may
+    disagree on a particle or two). Empty list -> unanchorable.
     """
     q = tokens(quote)
     if not q:
-        return None
+        return []
     stream = token_stream(segments)
     if not stream:
-        return None
+        return []
     toks = [t for t, _ in stream]
     n, m = len(toks), len(q)
 
-    for start in range(n - m + 1):  # exact contiguous match
-        if toks[start:start + m] == q:
-            return start, start + m
+    spans = [(start, start + m) for start in range(n - m + 1)
+             if toks[start:start + m] == q]
+    if spans:
+        return spans
 
     best_ratio, best_start = 0.0, -1
     for start in range(max(1, n - m + 1)):
@@ -79,13 +79,42 @@ def find_token_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
         if ratio > best_ratio:
             best_ratio, best_start = ratio, start
     if best_ratio >= FUZZY_THRESHOLD and best_start >= 0:
-        return best_start, min(best_start + m, n)
-    return None
+        return [(best_start, min(best_start + m, n))]
+    return []
 
 
-def find_span(quote: str, segments: list) -> Optional["tuple[int, int]"]:
+def find_token_span(quote: str, segments: list,
+                    near: Optional[set] = None) -> Optional["tuple[int, int]"]:
+    """Anchor `quote` in a turn's token stream -> (tok_start, tok_end_excl).
+
+    Short phrases repeat («هذا غير صحيح» can be said three times); anchoring
+    the FIRST occurrence plays the wrong repetition. `near` — the segment
+    indices the judge cited — disambiguates: prefer the occurrence whose
+    segments overlap it, else the one nearest to it, else the first.
+    """
+    spans = _token_spans(quote, segments)
+    if not spans:
+        return None
+    if len(spans) == 1 or not near:
+        return spans[0]
+    stream = token_stream(segments)
+
+    def seg_range(span):
+        return stream[span[0]][1], stream[span[1] - 1][1]
+
+    def distance(span):
+        lo, hi = seg_range(span)
+        if any(lo <= i <= hi for i in near):
+            return 0
+        return min(abs(i - lo) if i < lo else abs(i - hi) for i in near)
+
+    return min(spans, key=distance)
+
+
+def find_span(quote: str, segments: list,
+              near: Optional[set] = None) -> Optional["tuple[int, int]"]:
     """Anchor `quote` in a turn's segments -> (first_seg_i, last_seg_i) or None."""
-    hit = find_token_span(quote, segments)
+    hit = find_token_span(quote, segments, near)
     if hit is None:
         return None
     stream = token_stream(segments)
