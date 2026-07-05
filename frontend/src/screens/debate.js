@@ -115,10 +115,14 @@ export function mountDebate(root, ctx) {
     const { state, peerMuted, selfMuted, needsGesture } = lastLiveStatus;
     row.hidden = state === 'idle';
     const dot = root.querySelector('[data-live-dot]');
-    dot.className = `live-dot${state === 'connected' ? ' on' : state === 'failed' ? ' err' : ' busy'}`;
+    dot.className = `live-dot${state === 'connected' ? ' on'
+      : (state === 'failed' || state === 'unreachable') ? ' err' : ' busy'}`;
     root.querySelector('[data-live-status]').textContent =
       state === 'connecting' ? 'جارٍ الاتصال…'
-        : state === 'failed' ? 'تعذّر الاتصال المباشر' : '';
+        : state === 'failed' ? 'تعذّر الاتصال المباشر'
+          // Honest terminal state (never connected across retries): the
+          // debate itself is unaffected — recordings arrive after each turn.
+          : state === 'unreachable' ? 'تعذّر الاتصال المباشر — التسجيلات تصل بعد كل مداخلة' : '';
     const ct = lastState && lastState.current_turn;
     const turnSide = ct ? sideOf(ct) : null;
     const selfPill = root.querySelector('[data-live-self]');

@@ -1,5 +1,6 @@
 import './styles/tokens.css';
 import './styles/app.css';
+import './audiounlock.js'; // arm the autoplay unlock on the user's FIRST tap
 import { creds } from './store.js';
 import { startPolling } from './poll.js';
 import { mountLanding } from './screens/landing.js';

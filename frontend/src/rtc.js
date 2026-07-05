@@ -16,6 +16,15 @@
 // recorded. Self-mute swaps the sender's track for null: the RECORDING
 // track is never touched, so muting yourself never mutes your turn.
 import { api } from './api.js';
+import { unlockAudioEl, isUnlocked, setUnlocked } from './audiounlock.js';
+
+// A link that never connected across this many handshake generations is
+// reported 'unreachable' — an honest label instead of eternal «جاري
+// الاتصال» (a production room posted offers with ZERO ICE candidates for
+// six minutes: UDP-blocked network, nothing to connect to). Retries keep
+// running quietly; a mid-debate network change can still heal it.
+const UNREACHABLE_AFTER = 2;
+const CONNECT_WATCHDOG_MS = 15000;
 
 export function createLiveLink({ code, token, side, onStatus }) {
   let pc = null;
@@ -30,15 +39,18 @@ export function createLiveLink({ code, token, side, onStatus }) {
   let destroyed = false;
   let iceServers = null;
   let restartTimer = null;
+  let watchdog = null;       // this generation never connected -> retry
+  let failedGens = 0;
+  let everConnected = false;
   let peerMuted = false;     // their voice, on my speaker
   let selfMuted = false;     // my voice, on their speaker (never the recording)
   let needsGesture = false;
 
   function linkState() {
     if (!began) return 'idle';
-    if (!pc) return 'connecting';
-    if (pc.connectionState === 'connected') return 'connected';
-    if (pc.connectionState === 'failed') return 'failed';
+    if (pc && pc.connectionState === 'connected') return 'connected';
+    if (!everConnected && failedGens >= UNREACHABLE_AFTER) return 'unreachable';
+    if (pc && pc.connectionState === 'failed') return 'failed';
     return 'connecting';     // new / connecting / disconnected-recovering
   }
 
@@ -55,17 +67,14 @@ export function createLiveLink({ code, token, side, onStatus }) {
   // real activation gesture (click/touchend/keydown — debaters must tap «أنا
   // جاهز» and the mic orb anyway). A media element that has once played from
   // a gesture stays user-activated, so live audio then starts by itself.
-  const SILENT_WAV = 'data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
   let remoteStream = null;
-  let unlocked = false;
 
   function ensureAudioEl() {
+    // The app-global singleton, usually pre-armed by a tap long before the
+    // debate screen existed (create/join/«أنا جاهز») — see audiounlock.js.
     if (!audioEl) {
-      audioEl = document.createElement('audio');
-      audioEl.autoplay = true;
-      audioEl.setAttribute('playsinline', '');
+      audioEl = unlockAudioEl();
       audioEl.muted = peerMuted;
-      document.body.appendChild(audioEl);
     }
     return audioEl;
   }
@@ -76,10 +85,10 @@ export function createLiveLink({ code, token, side, onStatus }) {
     if (el.srcObject !== remoteStream) el.srcObject = remoteStream;
     try {
       await el.play();
-      unlocked = true;
+      setUnlocked();
       needsGesture = false;
     } catch {
-      needsGesture = !unlocked;  // pill only when no gesture has landed yet
+      needsGesture = !isUnlocked();  // pill only when no gesture ever landed
     }
     emit();
   }
@@ -89,16 +98,10 @@ export function createLiveLink({ code, token, side, onStatus }) {
     tryPlay();
   }
 
-  // The one-time unlock. If remote audio is already waiting, playing it IS
-  // the unlock; otherwise the silent clip pre-arms the element for later.
+  // Gesture hook while the debate screen is up: if remote audio is waiting
+  // behind the gate, any tap plays it (audiounlock.js handles pre-arming).
   function unlock() {
-    if (destroyed) return;
-    if (remoteStream) { tryPlay(); return; }
-    if (unlocked) return;
-    const el = ensureAudioEl();
-    el.src = SILENT_WAV;         // srcObject, once set, takes precedence
-    el.play().then(() => { unlocked = true; emit(); })
-      .catch(() => { /* not a real activation; the next gesture retries */ });
+    if (!destroyed && remoteStream && needsGesture) tryPlay();
   }
   document.addEventListener('click', unlock, true);
   document.addEventListener('touchend', unlock, true);
@@ -130,24 +133,52 @@ export function createLiveLink({ code, token, side, onStatus }) {
       e.track.addEventListener('unmute', tryPlay);
     };
     p.onconnectionstatechange = () => {
-      emit();
-      if (p.connectionState === 'connected') tryPlay();
-      else if (p.connectionState === 'failed') scheduleRestart(2000);
+      if (p.connectionState === 'connected') {
+        everConnected = true;
+        failedGens = 0;
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        tryPlay();
+      } else if (p.connectionState === 'failed') scheduleRestart(2000);
       else if (p.connectionState === 'disconnected') scheduleRestart(5000);
+      emit();
     };
     return p;
   }
 
-  // Vanilla ICE: wait for gathering to finish (or 2.5s — send what we have)
-  // so a single blob carries the SDP plus every candidate.
+  // Vanilla ICE: wait for gathering to finish so a single blob carries the
+  // SDP plus every candidate. Soft cap 2.5s — but ONLY if something was
+  // gathered: an offer with zero candidates gives the peer nothing to
+  // connect to (observed in production on a UDP-blocked network), so an
+  // empty blob waits up to the hard cap before being sent regardless (the
+  // watchdog + restart loop then owns the failure).
   function gathered(p) {
     if (p.iceGatheringState === 'complete') return Promise.resolve();
     return new Promise((resolve) => {
-      const t = setTimeout(resolve, 2500);
+      let hard = null;
+      const done = () => { clearTimeout(soft); clearTimeout(hard); resolve(); };
+      const hasCands = () => /\r?\na=candidate:/.test(
+        (p.localDescription && p.localDescription.sdp) || '');
+      const soft = setTimeout(() => { if (hasCands()) done(); }, 2500);
+      hard = setTimeout(done, 8000);
       p.addEventListener('icegatheringstatechange', () => {
-        if (p.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+        if (p.iceGatheringState === 'complete') done();
       });
     });
+  }
+
+  // This generation never reached 'connected' in time: count it and retry
+  // (A re-offers, B asks A to). Catches ICE stuck in 'new'/'checking' — with
+  // an empty remote candidate list it never even reaches 'failed'.
+  function armWatchdog() {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      watchdog = null;
+      if (destroyed || !pc || pc.connectionState === 'connected') return;
+      failedGens += 1;
+      emit();
+      if (side === 'a') makeOffer(gen + 1);
+      else requestRestart(answeredGen);
+    }, CONNECT_WATCHDOG_MS);
   }
 
   const sdpJson = (d) => ({ type: d.type, sdp: d.sdp });
@@ -165,6 +196,7 @@ export function createLiveLink({ code, token, side, onStatus }) {
       await pc.setLocalDescription(await pc.createOffer());
       await gathered(pc);
       await api.postRtc(code, token, { gen, sdp: sdpJson(pc.localDescription) });
+      armWatchdog();
     } catch { /* the next poll's onSignal retries */ }
     finally { starting = false; emit(); }
   }
@@ -192,6 +224,7 @@ export function createLiveLink({ code, token, side, onStatus }) {
       await api.postRtc(code, token, { gen: offerGen, sdp: sdpJson(pc.localDescription) });
       answeredGen = offerGen;
       restartAskedGen = -1;
+      armWatchdog();
     } catch { /* retried when the offer reappears in the poll */ }
     finally { starting = false; emit(); }
   }
@@ -208,6 +241,8 @@ export function createLiveLink({ code, token, side, onStatus }) {
     restartTimer = setTimeout(() => {
       restartTimer = null;
       if (destroyed || !pc || pc.connectionState === 'connected') return;
+      failedGens += 1;
+      emit();
       if (side === 'a') makeOffer(gen + 1);
       else requestRestart(answeredGen);
     }, delayMs);
@@ -262,7 +297,6 @@ export function createLiveLink({ code, token, side, onStatus }) {
 
   function resumeAudio() {  // the explicit «تفعيل الصوت» fallback pill
     if (remoteStream) tryPlay();
-    else unlock();
   }
 
   function destroy() {
@@ -271,9 +305,12 @@ export function createLiveLink({ code, token, side, onStatus }) {
     document.removeEventListener('touchend', unlock, true);
     document.removeEventListener('keydown', unlock, true);
     if (restartTimer) clearTimeout(restartTimer);
+    if (watchdog) clearTimeout(watchdog);
     if (pc) { try { pc.close(); } catch { /* closing */ } }
     if (audioEl) {
-      try { audioEl.srcObject = null; audioEl.remove(); } catch { /* gone */ }
+      // The element is the app-global unlock singleton: detach the stream
+      // but keep it alive (and armed) for the next mount (e.g. a rematch).
+      try { audioEl.srcObject = null; audioEl.muted = false; } catch { /* gone */ }
     }
   }
 
