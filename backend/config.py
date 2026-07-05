@@ -67,6 +67,20 @@ NOSHOW_GRACE_SECONDS = _int("HAKAM_NOSHOW_GRACE_SECONDS", 10)
 PROCESSING_HOLD_MAX_SECONDS = _int("HAKAM_PROCESSING_HOLD_MAX_SECONDS", 60)
 # Non-terminal room with no activity for this long -> abandoned.
 ABANDON_MINUTES = _int("HAKAM_ABANDON_MINUTES", 30)
+
+# --- Live audio (P2P WebRTC between the two debaters) ------------------------
+# STUN is free and always offered. TURN (the relay fallback for hostile NATs)
+# is minted short-lived from Cloudflare Realtime when these are set; the
+# secrets live here only — nothing reaches the frontend. Unset -> STUN-only:
+# live audio degrades on hard NATs, the debate itself never does.
+TURN_KEY_ID = os.environ.get("HAKAM_TURN_KEY_ID", "").strip()
+TURN_API_TOKEN = os.environ.get("HAKAM_TURN_API_TOKEN", "").strip()
+TURN_TTL_SECONDS = _int("HAKAM_TURN_TTL_SECONDS", 4 * 3600)
+STUN_URLS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+# A signal blob older than this collapses to a {gen} stub in the poll — the
+# SDP is only needed during the handshake; stubs keep the 2s payload small.
+RTC_SIGNAL_FRESH_SECONDS = _int("HAKAM_RTC_SIGNAL_FRESH_SECONDS", 90)
+RTC_MAX_SDP_BYTES = 64 * 1024
 # Presence: clients poll every 2s with their token; a debater unseen for
 # PRESENCE_TTL is shown as offline («غير متصل»). Bumps are throttled so the
 # poll doesn't write Firestore on every request.

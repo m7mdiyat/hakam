@@ -4,6 +4,7 @@ import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
 import { toast } from '../components.js';
 import { TurnRecorder, isSupported, warmMic, releaseMic } from '../recorder.js';
+import { createLiveLink } from '../rtc.js';
 
 const TEAL = 'var(--teal)';
 const CORAL = 'var(--coral)';
@@ -26,6 +27,14 @@ export function mountDebate(root, ctx) {
     <div class="screen-body debate">
       <div class="debate-topic" data-topic></div>
       <div class="chips" data-chips></div>
+
+      ${spectator ? '' : `
+      <div class="live-row" data-live hidden>
+        <span class="live-dot" data-live-dot></span>
+        <span class="micro-2">الصوت المباشر</span>
+        <button class="live-btn" data-live-mute type="button">كتم</button>
+        <button class="live-btn live-enable" data-live-enable type="button" hidden>تفعيل الصوت المباشر</button>
+      </div>`}
 
       <div class="timer">
         <div class="ring-wrap">
@@ -79,6 +88,31 @@ export function mountDebate(root, ctx) {
   let anchor = null;      // speaking clock { deadline, serverNow, perf, total }
   let prep = null;        // prep clock { deadline, serverNow, perf, label }
   let raf = null;
+
+  // --- live walkie-talkie link (participants only; strictly additive) -----
+  // The controls live in their own container rendered ONCE at mount — the
+  // poll re-renders everything around them, and the mute state must survive.
+  const live = (!spectator && typeof RTCPeerConnection !== 'undefined')
+    ? createLiveLink({
+      code, token, side: mine,
+      onStatus: ({ connected, muted, needsGesture }) => {
+        const row = root.querySelector('[data-live]');
+        if (!row) return;
+        row.hidden = !(connected || needsGesture);
+        root.querySelector('[data-live-dot]').classList.toggle('on', connected);
+        root.querySelector('[data-live-mute]').textContent = muted ? 'إلغاء الكتم' : 'كتم';
+        root.querySelector('[data-live-enable]').hidden = !needsGesture;
+      },
+    })
+    : null;
+  if (live) {
+    root.querySelector('[data-live-mute]').addEventListener('click', () => {
+      live.setMuted(!live.muted);
+    });
+    root.querySelector('[data-live-enable]').addEventListener('click', () => {
+      live.resumeAudio();
+    });
+  }
 
   // --- countdown (server-anchored, ticked locally) -----------------------
   const anchorRemaining = (a, cap) => {
@@ -211,7 +245,15 @@ export function mountDebate(root, ctx) {
     if (!started) ensureTurnStarted();
     rec = new TurnRecorder({
       maxMs: rem,
-      onStart: () => { if (recording) startRecTick(); },
+      onStart: () => {
+        if (recording) startRecTick();
+        // The live link transmits the SAME track the recorder just enabled:
+        // the opponent hears exactly what is being recorded, nothing else.
+        if (live && rec.stream) {
+          const t = rec.stream.getAudioTracks()[0];
+          if (t) live.attachMic(t);
+        }
+      },
       onStop: onRecorded,
       onDiscard: onDiscarded,
       onLevel: drawLevel,
@@ -412,6 +454,7 @@ export function mountDebate(root, ctx) {
     lastState = state;
     root.querySelector('[data-topic]').textContent = state.topic;
     renderChips(state);
+    if (live && state.rtc) live.onSignal(state.rtc);
 
     // timer anchors: speaking clock (deadline set) vs prep window (not started)
     const secs = state.format.turn_seconds;
@@ -511,6 +554,7 @@ export function mountDebate(root, ctx) {
       if (raf) cancelAnimationFrame(raf);
       stopRecTick();
       if (recording && rec) rec.cancel();
+      if (live) live.destroy();
       if (!spectator) releaseMic();   // debate over (or navigated away): let go of the device
       try { audioEl.pause(); } catch { /* ignore */ }
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });

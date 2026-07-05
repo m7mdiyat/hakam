@@ -263,6 +263,24 @@ button { font-family: inherit; }
 .chip-b { background: var(--coral-bg-10); border: 1px solid var(--coral-line-32); color: var(--coral-light); }
 .chip-b b { color: var(--coral); }
 
+/* Live walkie-talkie controls (stable container — never re-rendered by the poll) */
+.live-row {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-size: 12.5px; color: var(--muted);
+}
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted-2); flex: none; transition: background 0.3s;
+}
+.live-dot.on { background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+.live-btn {
+  background: none; border: none; cursor: pointer; font: inherit; padding: 0;
+  color: var(--muted); text-decoration: underline; text-underline-offset: 3px;
+  font-size: 12.5px;
+}
+.live-btn:hover { color: var(--ink); }
+.live-enable { color: var(--gold); font-weight: 500; }
+
 /* «يشاهد الآن» strip + spectator affordances */
 .spec-strip {
   display: flex; align-items: center; justify-content: center; flex-wrap: wrap;

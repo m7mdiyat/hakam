@@ -356,7 +356,12 @@ def get_room(code):
         room = get_store().update(
             normalize_code(code),
             lambda r: S.bump_spectator_presence(r, token, S.now_utc()))
-    return _view(room)
+    view = S.public_view(room)
+    if side:
+        # Live-audio signaling rides the debaters' poll only: the blobs carry
+        # ICE candidates (device IPs) — never for spectators/anonymous.
+        view["rtc"] = S.rtc_view(room)
+    return jsonify(view)
 
 
 def _maybe_judge(room: dict) -> dict:
@@ -392,6 +397,74 @@ def judge_room(code):
     room = _load(code)
     _require_side(room)
     return _view(_maybe_judge(room))
+
+
+@api.post("/rooms/<code>/rtc")
+def rtc_signal(code):
+    """Live-audio signaling (debaters only): store my WebRTC blob — one
+    vanilla-ICE offer/answer per generation, or a restart request (B can't
+    offer, so it asks A to re-offer). The opponent reads it from their poll."""
+    room = _load(code)
+    side = _require_side(room)
+    body = _body()
+    try:
+        gen = int(body.get("gen"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "invalid_input", "الحقل «gen» مطلوب.")
+    sdp = body.get("sdp")
+    restart = bool(body.get("restart"))
+    if sdp is not None:
+        if (not isinstance(sdp, dict) or sdp.get("type") not in ("offer", "answer")
+                or not isinstance(sdp.get("sdp"), str) or not sdp["sdp"]):
+            raise ApiError(400, "invalid_input", "صيغة SDP غير صالحة.")
+        if len(sdp["sdp"].encode("utf-8")) > config.RTC_MAX_SDP_BYTES:
+            raise ApiError(413, "sdp_too_large", "حزمة الاتصال أكبر من المسموح.")
+        sdp = {"type": sdp["type"], "sdp": sdp["sdp"]}  # whitelist keys
+    elif not restart:
+        raise ApiError(400, "invalid_input", "sdp أو restart مطلوب.")
+
+    get_store().update(normalize_code(code),
+                       lambda r: S.set_rtc_signal(r, side, gen, sdp, restart=restart))
+    return jsonify({"ok": True})
+
+
+def _fetch_turn_servers():
+    """Short-lived Cloudflare TURN credentials, or None when unconfigured or
+    the mint fails — callers fall back to STUN-only (live audio may not
+    connect on hard NATs; the debate itself is unaffected)."""
+    if not (config.TURN_KEY_ID and config.TURN_API_TOKEN):
+        return None
+    import json as _json
+    from urllib import request as _rq
+    try:
+        req = _rq.Request(
+            "https://rtc.live.cloudflare.com/v1/turn/keys/"
+            f"{config.TURN_KEY_ID}/credentials/generate-ice-servers",
+            data=_json.dumps({"ttl": config.TURN_TTL_SECONDS}).encode(),
+            headers={"Authorization": f"Bearer {config.TURN_API_TOKEN}",
+                     "Content-Type": "application/json"},
+            method="POST")
+        with _rq.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+        servers = data.get("iceServers")
+        if isinstance(servers, dict):
+            servers = [servers]
+        return servers if isinstance(servers, list) and servers else None
+    except Exception:
+        return None
+
+
+@api.get("/rooms/<code>/ice")
+def ice_servers(code):
+    """ICE servers for the live-audio link (debaters only). STUN always;
+    TURN relay credentials are minted when Cloudflare keys are configured."""
+    room = _load(code)
+    _require_side(room)
+    servers = [{"urls": config.STUN_URLS}]
+    turn = _fetch_turn_servers()
+    if turn:
+        servers.extend(turn)
+    return jsonify({"iceServers": servers})
 
 
 @api.post("/rooms/<code>/rematch")

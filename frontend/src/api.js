@@ -79,6 +79,14 @@ export const api = {
   rematch: (code, token) =>
     fetch(`${API}/rooms/${code}/rematch`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
 
+  // Live-audio (P2P) signaling + ICE servers — debaters only.
+  postRtc: (code, token, payload) =>
+    fetch(`${API}/rooms/${code}/rtc`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(payload),
+    }).then(handle),
+  getIce: (code, token) =>
+    fetch(`${API}/rooms/${code}/ice`, { headers: { 'X-Debater-Token': token } }).then(handle),
+
   submitTurn: (code, token, blob, durationMs) => {
     const fd = new FormData();
     const ext = (blob.type.split('/')[1] || 'webm').split(';')[0];

@@ -79,6 +79,7 @@ def new_room(code: str, topic: str, token_a: str) -> dict:
         "finish_requested": {"a": False, "b": False},
         "verdict": None,  # Phase 2
         "spectators": {},  # token -> {name, joined_at, last_seen_at}; read-only viewers
+        "rtc": {"a": None, "b": None},  # live-audio signaling blobs (debater-only view)
         "secret_tokens": {"a": token_a, "b": None},
         "created_at": now,
         "updated_at": now,
@@ -173,6 +174,39 @@ def bump_spectator_presence(room: dict, token: str, now: Optional[datetime] = No
 def is_expired(room: dict, now: Optional[datetime] = None) -> bool:
     now = now or now_utc()
     return now > room["expires_at"]
+
+
+# --- live audio signaling (P2P WebRTC between debaters) ----------------------
+def set_rtc_signal(room: dict, side: str, gen: int, sdp: Optional[dict],
+                   restart: bool = False, now: Optional[datetime] = None) -> None:
+    """Store this side's live-audio blob: one vanilla-ICE offer/answer per
+    generation, or a restart request (B can't offer — it asks A to re-offer).
+    Overwrites — only the latest signal matters. Strings/ints only: this
+    lands on the Firestore room doc."""
+    now = now or now_utc()
+    room.setdefault("rtc", {})[side] = {
+        "gen": int(gen), "sdp": sdp, "restart": bool(restart), "at": now,
+    }
+    _touch(room, now)
+
+
+def rtc_view(room: dict, now: Optional[datetime] = None) -> dict:
+    """Debater-only projection of both signaling blobs. NEVER goes into
+    public_view — SDP blobs carry ICE candidates (device IP addresses), which
+    spectators and anonymous pollers must not see. Old blobs collapse to a
+    {gen} stub: the SDP is only useful during the handshake."""
+    now = now or now_utc()
+    out = {}
+    for s in SIDES:
+        e = (room.get("rtc") or {}).get(s)
+        if not e:
+            out[s] = None
+        elif (now - e["at"]).total_seconds() > config.RTC_SIGNAL_FRESH_SECONDS:
+            out[s] = {"gen": e["gen"], "stale": True}
+        else:
+            out[s] = {"gen": e["gen"], "sdp": e.get("sdp"),
+                      "restart": bool(e.get("restart"))}
+    return out
 
 
 # --- transitions (each returns True if it mutated) --------------------------
