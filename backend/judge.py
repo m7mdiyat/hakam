@@ -409,14 +409,26 @@ def merge_arg_evals(probes: list, maps: dict) -> dict:
                                     if v["verdict"] == cand and v["failure_point_ar"]), "")
                     break
             effect = None
+            effect_votes = []
             if arg.get("rebuts"):
-                effs = sorted(
-                    (_EFFECT_ORDER.index(v["rebuttal_effect"]) for v in votes
-                     if v.get("rebuttal_effect") in _EFFECT_ORDER))
+                effect_votes = [v["rebuttal_effect"] for v in votes
+                                if v.get("rebuttal_effect") in _EFFECT_ORDER]
+                effs = sorted(_EFFECT_ORDER.index(e) for e in effect_votes)
                 effect = _EFFECT_ORDER[effs[len(effs) // 2]] if effs else "unaffected"
+            # The SCORE prices the ensemble's expectation, the card shows the
+            # consensus: a 2-2 strong/weak split costs the mean credit, not a
+            # cliff-jump to «contested» 0.5 — run-to-run drift of ONE probe
+            # then moves درجة الحجاج by ~3 points instead of ~28 (the Gate-3
+            # tier flapping this replaced).
             out[aid] = {"classification": cls, "tentative": tentative,
                         "verdict": verdict, "failure_point_ar": failure,
                         "rebuttal_effect": effect,
+                        "credit_mean": (statistics.mean(
+                            CREDIT[v["verdict"]] for v in fam_votes)
+                            if fam_votes else None),
+                        "survival_mean": (statistics.mean(
+                            SURVIVAL[e] for e in effect_votes)
+                            if effect_votes else None),
                         "votes": len(votes), "contested": verdict == "contested"}
     return out
 
@@ -518,17 +530,20 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
     strawman = _strawman_rebuttal_ids(fallacies)
     preempts = preempts or {}
 
-    # Worst rebuttal effect suffered per target argument.
+    # Worst rebuttal survival suffered per target argument — the ensemble
+    # MEAN when vote detail exists (variance damping), else the categorical
+    # effect (per-probe scoring and older evals).
     suffered = {}
     for arg in maps[other]["arguments"]:
         if arg.get("rebuts") and arg["id"] not in strawman:
             ev = evals.get(arg["id"]) or {}
             eff = ev.get("rebuttal_effect")
-            if eff in ("defeated", "weakened"):
+            surv = ev.get("survival_mean")
+            if surv is None and eff in ("defeated", "weakened"):
+                surv = SURVIVAL[eff]
+            if surv is not None and surv < 1.0:
                 tid = arg["rebuts"]["target_id"]
-                worst = suffered.get(tid, "unaffected")
-                if _EFFECT_ORDER.index(eff) < _EFFECT_ORDER.index(worst):
-                    suffered[tid] = eff
+                suffered[tid] = min(suffered.get(tid, 1.0), surv)
 
     # التحصين المسبق: the opponent's earlier text already answered a late
     # argument — the same survival discipline rebuttals apply, for the turns
@@ -536,15 +551,15 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
     for aid, pe in preempts.items():
         if aid.split("-")[0] != side:
             continue
-        worst = suffered.get(aid, "unaffected")
-        if _EFFECT_ORDER.index(pe["effect"]) < _EFFECT_ORDER.index(worst):
-            suffered[aid] = pe["effect"]
+        suffered[aid] = min(suffered.get(aid, 1.0), SURVIVAL[pe["effect"]])
 
     credits, negative = [], set()
     for arg in maps[side]["arguments"]:
         ev = evals.get(arg["id"]) or {"verdict": "contested"}
-        base = CREDIT.get(ev["verdict"], 0.5)
-        survival = SURVIVAL.get(suffered.get(arg["id"], "unaffected"), 1.0)
+        base = ev.get("credit_mean")
+        if base is None:
+            base = CREDIT.get(ev["verdict"], 0.5)
+        survival = suffered.get(arg["id"], 1.0)
         if not arg.get("answerable") and arg["id"] not in preempts:
             # قاعدة الكلمة الأخيرة: nobody could answer it and nothing
             # pre-answered it — priced as unproven, never as fully earned.
@@ -559,7 +574,10 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
     opp_args = []
     for arg in maps[other]["arguments"]:
         ev = evals.get(arg["id"]) or {"verdict": "contested"}
-        opp_args.append({"credit": CREDIT.get(ev["verdict"], 0.5),
+        credit = ev.get("credit_mean")
+        if credit is None:
+            credit = CREDIT.get(ev["verdict"], 0.5)
+        opp_args.append({"credit": credit,
                          "answerable": bool(arg.get("answerable")),
                          "addressed": arg["id"] in my_rebuts})
 

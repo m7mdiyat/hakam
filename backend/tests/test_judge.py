@@ -77,6 +77,27 @@ def test_verdict_two_two_is_contested():
     assert merge_arg_evals(probes, maps)["a-1"]["contested"] is True
 
 
+def test_score_prices_the_expectation_not_the_consensus_cliff():
+    # A 2-2 strong/weak split scores the ensemble MEAN (0.625), and one probe
+    # drifting run-to-run moves the credit gently (0.625 -> 0.7625), never the
+    # old strong/contested cliff (0.9 -> 0.5) that flapped Gate-3 tiers.
+    maps = {"a": _map("a"), "b": _map("b", 0)}
+    split = [_probe({"a-1": _probe_eval("strong")})] * 2 + \
+            [_probe({"a-1": _probe_eval("weak")})] * 2
+    assert merge_arg_evals(split, maps)["a-1"]["credit_mean"] == pytest.approx(0.625)
+    drifted = [_probe({"a-1": _probe_eval("strong")})] * 3 + \
+              [_probe({"a-1": _probe_eval("weak")})]
+    assert merge_arg_evals(drifted, maps)["a-1"]["credit_mean"] == pytest.approx(0.7625)
+
+
+def test_rebuttal_survival_mean_dampens_effect_flapping():
+    maps = {"a": _map("a", rebuts={"target_id": "b-1"}), "b": _map("b")}
+    effects = ["weakened", "weakened", "unaffected", "unaffected"]
+    probes = [_probe({"a-1": _probe_eval(effect=e), "b-1": _probe_eval()}) for e in effects]
+    r = merge_arg_evals(probes, maps)["a-1"]
+    assert r["survival_mean"] == pytest.approx((0.7 + 0.7 + 1.0 + 1.0) / 4)
+
+
 def test_classification_override_needs_three_and_flips_family():
     maps = {"a": _map("a"), "b": _map("b", 0)}
     probes = [_probe({"a-1": _probe_eval("valid", agree=False, alt="deductive")})] * 3 \
