@@ -60,6 +60,9 @@ export function mountDebate(root, ctx) {
         <button class="mic" data-mic type="button"><span class="mic-glyph" data-mic-glyph></span></button>
         <canvas class="wave" data-wave width="224" height="36" hidden></canvas>
         <div class="mic-label" data-mic-label></div>
+        <div class="micro-2 mic-perm-hint" data-perm-hint hidden>
+          عند طلب إذن الميكروفون اختر «السماح أثناء زيارة الموقع» كي لا يتكرر السؤال في كل مرة
+        </div>
       </div>`}
 
       <div class="turns-panel">
@@ -580,6 +583,20 @@ export function mountDebate(root, ctx) {
   // first tap records instantly (and the debate never re-prompts). Never prompts.
   // Spectators never touch the mic at all — not even a permission query.
   if (!spectator) warmMic();
+
+  // Persistence of the mic grant is the BROWSER's choice, not ours: Chrome
+  // offers «أثناء زيارة الموقع» (permanent) vs «هذه المرة فقط» (re-asks every
+  // visit). The only lever a web page has is telling the user which to pick —
+  // shown only while the browser actually intends to prompt.
+  if (!spectator && navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'microphone' }).then((st) => {
+      const hint = root.querySelector('[data-perm-hint]');
+      if (!hint) return;
+      const show = () => { hint.hidden = st.state !== 'prompt'; };
+      show();
+      st.onchange = show;
+    }).catch(() => { /* Safari: query unsupported; no hint */ });
+  }
 
   return {
     update: apply,
