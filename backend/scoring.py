@@ -24,6 +24,12 @@ and the fallacy deduction are two distinct offenses.
 from __future__ import annotations
 
 CREDIT = {"valid": 1.0, "strong": 0.9, "contested": 0.5, "invalid": 0.35, "weak": 0.35}
+# قاعدة الكلمة الأخيرة: survival multiplier for an argument raised in a turn
+# the opponent could never answer, when nothing in the opponent's earlier
+# speech pre-answered it either. A tested-and-survived argument has EARNED its
+# credit; an untestable one merely claims it — and without this, sandbagging
+# your best material into the final turn is a free win. Gate-3-style prior.
+UNTESTED_FACTOR = 0.8
 ASSERTION_FLOOR = 0.15          # a debater with only bare assertions
 RANK_W = [1.0, 0.5, 0.25, 0.125]
 SURVIVAL = {"defeated": 0.3, "weakened": 0.7, "unaffected": 1.0}

@@ -240,6 +240,30 @@ def _arg_eval(arg_ids: list) -> dict:
     }
 
 
+def _preemption_item(arg_ids: list) -> dict:
+    """التحصين المسبق: the opponent's EARLIER speech already answered a
+    late-turn argument nobody could rebut. Receipt discipline as fallacies:
+    verbatim quote + segment ids, server-validated (owner + strictly earlier
+    turn + answerability) before anything scores."""
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "argument_id": {"type": "STRING", "enum": list(arg_ids),
+                            "description": "الحجة المتأخرة التي عولجت مسبقًا"},
+            "quote": {"type": "STRING",
+                      "description": "اقتباس حرفي من كلام الخصم السابق للحجة"},
+            "segment_ids": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "explanation_ar": {"type": "STRING",
+                               "description": "وجه المعالجة المسبقة بإيجاز"},
+            "effect": {"type": "STRING", "enum": ["defeated", "weakened"],
+                       "description": "أثر المعالجة المسبقة في الحجة"},
+        },
+        "required": ["argument_id", "quote", "segment_ids", "explanation_ar", "effect"],
+        "propertyOrdering": ["argument_id", "quote", "segment_ids",
+                             "explanation_ar", "effect"],
+    }
+
+
 def _soundness_item(arg_ids: list) -> dict:
     return {
         "type": "OBJECT",
@@ -285,6 +309,7 @@ def probe_schema(turn_ids: list, arg_ids: list, label_order: str = "ab") -> dict
         "type": "OBJECT",
         "properties": {
             "argument_evals": {"type": "ARRAY", "items": _arg_eval(arg_ids)},
+            "preemptions": {"type": "ARRAY", "items": _preemption_item(arg_ids)},
             "soundness": {"type": "ARRAY", "items": _soundness_item(arg_ids)},
             "fallacies": {"type": "ARRAY", "items": fallacy},
             "extraction_issues": {"type": "ARRAY", "items": _EXTRACTION_ISSUE},
@@ -297,9 +322,9 @@ def probe_schema(turn_ids: list, arg_ids: list, label_order: str = "ab") -> dict
             "winner": {"type": "STRING", "enum": ["a", "b"]},
             "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
         },
-        "required": ["argument_evals", "soundness", "fallacies", "extraction_issues",
-                     "axes", "winner", "confidence"],
-        "propertyOrdering": ["argument_evals", "soundness", "fallacies",
+        "required": ["argument_evals", "preemptions", "soundness", "fallacies",
+                     "extraction_issues", "axes", "winner", "confidence"],
+        "propertyOrdering": ["argument_evals", "preemptions", "soundness", "fallacies",
                              "extraction_issues", "axes", "winner", "confidence"],
     }
 

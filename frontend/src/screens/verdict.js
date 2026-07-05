@@ -26,6 +26,7 @@ const AV_AR = { valid: 'سليم البناء', invalid: 'مختل البناء'
 const AV_KIND = { valid: 'good', strong: 'good', invalid: 'bad', weak: 'bad',
                   contested: 'mid' };
 const EFFECT_AR = { defeated: 'أسقطتها', weakened: 'أضعفتها', unaffected: 'لم تؤثر فيها' };
+const PREEMPT_AR = { defeated: 'فأسقطتها معالجتُه', weakened: 'فأضعفتها معالجتُه' };
 const SND_AR = { self_contradiction: 'تناقض ذاتي',
                  unsupported_load_bearing: 'ادعاء مفصلي بلا سند',
                  premise_conclusion_drift: 'انزياح عن المقدمات',
@@ -107,13 +108,29 @@ function radarInnerSvg(v) {
     ${poly('a', '#3FB8AF')}${poly('b', '#F2735F')}${labels}`;
 }
 
-function radarHtml(v) {
+// One side null on an axis while the other scored: without a note, the
+// shorter polygon reads as «scored zero» (a debater literally asked why).
+function radarNote(state, v) {
+  const notes = [];
+  AXES.forEach((ax) => {
+    ['a', 'b'].forEach((s) => {
+      const other = s === 'a' ? 'b' : 'a';
+      if (v.scores[s][ax] == null && v.scores[other][ax] != null) {
+        notes.push(`${AXIS_AR[ax]}: لم تتح لـ${nameOf(state, s)} فرصة الرد فلا يُحتسب عليه`);
+      }
+    });
+  });
+  return notes.length ? `<div class="radar-note">${notes.map(esc).join(' · ')}</div>` : '';
+}
+
+function radarHtml(state, v) {
   return `
     <div class="v-panel">
       <div class="panel-head"><span>مقارنة الأداء</span></div>
       <svg class="radar" viewBox="-52 -16 384 312" role="img" aria-label="مقارنة الأداء">
         ${radarInnerSvg(v)}
       </svg>
+      ${radarNote(state, v)}
     </div>`;
 }
 
@@ -124,9 +141,10 @@ function axesInnerHtml(state, v) {
       ? '<div class="axis-na">غير منطبق — لم تتح فرصة للرد</div>'
       : ['a', 'b'].map((s) => {
         const val = v.scores[s][ax];
+        // null = structurally inapplicable (no turn after the opponent) —
+        // say so; an empty bar reads as a zero SCORE, which it is not.
         return val == null
-          ? `<div class="axis-bar-row"><span class="axis-val">—</span>
-               <div class="axis-bar"><i style="width:0"></i></div></div>`
+          ? '<div class="axis-bar-row"><span class="axis-inapp">لم تتح له فرصة الرد — لا يُحتسب</span></div>'
           : `<div class="axis-bar-row"><span class="axis-val">${val}</span>
                <div class="axis-bar"><i style="width:${val}%;background:${sideColor(s)}"></i></div></div>`;
       }).join('');
@@ -197,9 +215,22 @@ function argCardHtml(state, side, arg, rebuttedBy) {
   if (rebuttedBy) {
     links.push(`ردّ عليها ${esc(nameOf(state, rebuttedBy.side))} — ${EFFECT_AR[rebuttedBy.effect] || ''}`);
   }
+  // التحصين المسبق: the opponent answered this argument before it was made —
+  // shown with the opponent's own words, playable in their voice.
+  const preempted = arg.preempted ? `
+    <div class="arg-preempt">
+      <div class="arg-preempt-head">عالجها ${esc(nameOf(state, side === 'a' ? 'b' : 'a'))} مسبقًا
+        — ${PREEMPT_AR[arg.preempted.effect] || ''}</div>
+      <div class="arg-line"><span class="arg-quote">«${esc(arg.preempted.quote)}»</span>
+        ${playChip(`pe-${arg.id}`, arg.preempted.audio)}</div>
+      ${arg.preempted.explanation_ar ? `<div class="arg-preempt-why">${esc(arg.preempted.explanation_ar)}</div>` : ''}
+    </div>` : '';
+  const untested = arg.untested
+    ? '<span class="arg-badge arg-untested" title="قيلت في آخر مداخلة فلم يتسنَّ لأحد الرد عليها؛ تُحتسب بوزن مخفف">طُرحت في آخر مداخلة — لم تُختبر</span>'
+    : '';
   return `
     <div class="arg-card" id="arg-${arg.id}" style="--c:${sideColor(side)}">
-      <div class="arg-chips">${chips}${arg.unanswered ? '<span class="arg-badge">بقيت بلا ردّ</span>' : ''}</div>
+      <div class="arg-chips">${chips}${arg.unanswered ? '<span class="arg-badge">بقيت بلا ردّ</span>' : ''}${untested}</div>
       <div class="arg-line arg-concl">
         <span class="arg-line-label">النتيجة</span>
         <span class="arg-quote">«${esc(arg.conclusion.quote)}»</span>
@@ -208,6 +239,7 @@ function argCardHtml(state, side, arg, rebuttedBy) {
       ${premises}${implicit}
       ${arg.failure_point_ar ? `<div class="arg-fail">موضع الخلل: ${esc(arg.failure_point_ar)}</div>` : ''}
       ${links.length ? `<div class="arg-links">${links.join(' · ')}</div>` : ''}
+      ${preempted}
     </div>`;
 }
 
@@ -285,6 +317,7 @@ function assessmentStripHtml(state, v) {
         <svg class="radar" viewBox="-52 -16 384 312" role="img" aria-label="مقارنة الأداء">
           ${radarInnerSvg(v)}
         </svg>
+        ${radarNote(state, v)}
       </div>
     </div>`;
 }
@@ -408,7 +441,7 @@ export function verdictHtml(state, spectator = false) {
       ${soundnessHtml(state, v)}
       ${externalHtml(state, v)}
       ${assessmentStripHtml(state, v)}` : `
-      ${radarHtml(v)}
+      ${radarHtml(state, v)}
       ${axesHtml(state, v)}
       ${emotionalityHtml(state, v)}
       ${fallaciesHtml(state, v)}

@@ -37,7 +37,7 @@ from .prompts import PROBE_PROMPT, SYNTHESIS_PROMPT
 from .schemas import (AXES, AXIS_NAMES_AR, EMOTIONAL_FALLACIES, FALLACY_DEFS_AR,
                       FALLACY_NAMES, FALLACY_TYPES, SEVERITIES, SOUNDNESS_NAMES,
                       SOUNDNESS_TYPES, probe_schema, synthesis_schema)
-from .scoring import CREDIT, SURVIVAL, compute_score
+from .scoring import CREDIT, SURVIVAL, UNTESTED_FACTOR, compute_score
 from .store import get_store
 
 log = logging.getLogger("hakam.judge")
@@ -277,8 +277,39 @@ def _clean_probe(raw: dict, room: dict, mapping: dict, trans: dict,
             issues.append({"kind": i["kind"], "segment_ids": ids,
                            "note_ar": (i.get("note_ar") or "").strip()})
 
+    # التحصين المسبق: the opponent's EARLIER text already answered a late
+    # argument nobody could rebut. Receipt discipline, all server-enforced:
+    # the quote must anchor in the OPPONENT's speech, strictly BEFORE the
+    # target was raised, and only untestable (answerable=False) targets
+    # qualify — everything else has the normal rebuttal channel.
+    args_by_id = {a["id"]: a for s in ("a", "b") for a in maps[s]["arguments"]}
+    preemptions = []
+    for pe in raw.get("preemptions") or []:
+        try:
+            rid = trans.get(pe.get("argument_id"))
+            arg = args_by_id.get(rid)
+            if arg is None or arg.get("answerable") or pe.get("effect") not in ("defeated", "weakened"):
+                continue
+            opp = "b" if rid.split("-")[0] == "a" else "a"
+            v = _validate_quoted({"quote": pe.get("quote"),
+                                  "segment_ids": pe.get("segment_ids")}, spaces[opp])
+            if v is None:
+                continue
+            raised = max(int(i.split("-")[0][1:])
+                         for i in arg["conclusion"]["segment_ids"])
+            if int(v["turn"][1:]) >= raised:
+                continue
+            preemptions.append({
+                "target_id": rid, "turn": v["turn"], "quote": v["quote"],
+                "segment_ids": v["segment_ids"], "effect": pe["effect"],
+                "explanation_ar": (pe.get("explanation_ar") or "").strip(),
+            })
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+
     return {"axes": axes, "evals": evals, "soundness": soundness,
             "fallacies": fallacies, "issues": issues, "holistic": holistic,
+            "preemptions": preemptions,
             "confidence": raw.get("confidence", "medium")}
 
 
@@ -320,11 +351,13 @@ def _cluster(items: list, key_fn) -> list:
             if same_key and overlap:
                 c["probes"].add(probe_idx)
                 c["severities"].append(item.get("severity"))
+                c["members"].append(item)
                 placed = True
                 break
         if not placed:
             clusters.append({"item": dict(item), "probes": {probe_idx},
-                             "severities": [item.get("severity")]})
+                             "severities": [item.get("severity")],
+                             "members": [item]})
     return clusters
 
 
@@ -407,6 +440,36 @@ def merge_findings(probes: list) -> "tuple[list, list]":
     return fal, snd
 
 
+def merge_preemptions(probes: list) -> dict:
+    """Consensus التحصين المسبق: target arg id -> {quote, segment_ids, turn,
+    effect, explanation_ar, found_by}. Same bar as fallacies (>=ceil(0.75·n)
+    probes agreeing on the target with overlapping receipts); the effect is
+    the ordinal median over the cluster — ties resolve to the MILDER effect."""
+    threshold = max(1, ceil(0.75 * len(probes)))
+    out = {}
+    for c in _cluster([(i, pe) for i, p in enumerate(probes)
+                       for pe in p.get("preemptions", [])],
+                      key_fn=lambda pe: pe["target_id"]):
+        if len(c["probes"]) < threshold:
+            continue
+        effs = sorted(_EFFECT_ORDER.index(m["effect"]) for m in c["members"])
+        out[c["item"]["target_id"]] = {
+            **c["item"], "effect": _EFFECT_ORDER[effs[len(effs) // 2]],
+            "found_by": len(c["probes"]),
+        }
+    return out
+
+
+def _probe_preempts(probe: dict) -> dict:
+    """One probe's own preemptions (already validated), worst effect per target."""
+    out = {}
+    for pe in probe.get("preemptions") or []:
+        cur = out.get(pe["target_id"])
+        if cur is None or _EFFECT_ORDER.index(pe["effect"]) < _EFFECT_ORDER.index(cur["effect"]):
+            out[pe["target_id"]] = pe
+    return out
+
+
 def collect_audit_flags(probes: list) -> list:
     """Extraction issues >=2 probes agree on (kind + segment overlap)."""
     flagged = []
@@ -450,9 +513,10 @@ def _strawman_rebuttal_ids(fallacies: list) -> set:
 
 
 def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
-                  soundness: list) -> dict:
+                  soundness: list, preempts: Optional[dict] = None) -> dict:
     other = "b" if side == "a" else "a"
     strawman = _strawman_rebuttal_ids(fallacies)
+    preempts = preempts or {}
 
     # Worst rebuttal effect suffered per target argument.
     suffered = {}
@@ -466,11 +530,26 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
                 if _EFFECT_ORDER.index(eff) < _EFFECT_ORDER.index(worst):
                     suffered[tid] = eff
 
+    # التحصين المسبق: the opponent's earlier text already answered a late
+    # argument — the same survival discipline rebuttals apply, for the turns
+    # nobody could rebut (validation restricted preempts to those).
+    for aid, pe in preempts.items():
+        if aid.split("-")[0] != side:
+            continue
+        worst = suffered.get(aid, "unaffected")
+        if _EFFECT_ORDER.index(pe["effect"]) < _EFFECT_ORDER.index(worst):
+            suffered[aid] = pe["effect"]
+
     credits, negative = [], set()
     for arg in maps[side]["arguments"]:
         ev = evals.get(arg["id"]) or {"verdict": "contested"}
         base = CREDIT.get(ev["verdict"], 0.5)
-        credits.append(base * SURVIVAL.get(suffered.get(arg["id"], "unaffected"), 1.0))
+        survival = SURVIVAL.get(suffered.get(arg["id"], "unaffected"), 1.0)
+        if not arg.get("answerable") and arg["id"] not in preempts:
+            # قاعدة الكلمة الأخيرة: nobody could answer it and nothing
+            # pre-answered it — priced as unproven, never as fully earned.
+            survival = min(survival, UNTESTED_FACTOR)
+        credits.append(base * survival)
         if ev["verdict"] in ("invalid", "weak"):
             negative.add(arg["id"])
 
@@ -502,7 +581,8 @@ def _probe_structured_winner(probe: dict, maps: dict) -> Optional[str]:
         fal = [{**f, "severity": _severity_final(f, maps)}
                for f in probe["fallacies"]]
         scores[side] = compute_score(_score_inputs(
-            side, maps, probe["evals"], fal, probe["soundness"]))["score"]
+            side, maps, probe["evals"], fal, probe["soundness"],
+            _probe_preempts(probe)))["score"]
     if scores["a"] > scores["b"]:
         return "a"
     if scores["b"] > scores["a"]:
@@ -724,7 +804,8 @@ _EFFECT_AR = {"defeated": "أسقطتها", "weakened": "أضعفتها", "unaff
 
 
 def _results_block(maps: dict, arg_results: dict, fallacies: list,
-                   soundness: list, scores: dict, winner: Optional[str]) -> str:
+                   soundness: list, scores: dict, winner: Optional[str],
+                   preempts: Optional[dict] = None) -> str:
     lines = []
     if winner is None:
         lines.append("النتيجة: متقاربة — لا فائز محسوم.")
@@ -743,6 +824,9 @@ def _results_block(maps: dict, arg_results: dict, fallacies: list,
                 line += f" (ردٌّ {_EFFECT_AR[r['rebuttal_effect']]})"
             if arg.get("unanswered"):
                 line += " (بقيت بلا رد)"
+            pe = (preempts or {}).get(arg["id"])
+            if pe:
+                line += f" (عالجها الخصم مسبقًا في كلامه — {_EFFECT_AR[pe['effect']]})"
             lines.append(line)
     for f in fallacies:
         lines.append(f"مغالطة على «{LABEL_AR[f['speaker']]}»: {FALLACY_NAMES[f['type']][0]} — «{f['quote'][:60]}»")
@@ -794,12 +878,14 @@ def _needs_transcript(t: dict) -> bool:
         and (t.get("transcript") or {}).get("status") != "ok"
 
 
-def _display_map(room: dict, maps: dict, arg_results: dict) -> dict:
+def _display_map(room: dict, maps: dict, arg_results: dict,
+                 preempts: Optional[dict] = None) -> dict:
     out = {}
     for side in ("a", "b"):
         args = []
         for arg in maps[side]["arguments"]:
             r = arg_results[arg["id"]]
+            pe = (preempts or {}).get(arg["id"])
             args.append({
                 "id": arg["id"], "weight": arg["weight"],
                 "classification": {"type": r["classification"], "tentative": r["tentative"]},
@@ -820,6 +906,17 @@ def _display_map(room: dict, maps: dict, arg_results: dict) -> dict:
                             "effect": r["rebuttal_effect"]}
                            if arg.get("rebuts") else None),
                 "unanswered": bool(arg.get("unanswered")),
+                # التحصين المسبق: the opponent's earlier words answered this
+                # late argument — playable receipt in the opponent's voice.
+                "preempted": ({"quote": pe["quote"], "effect": pe["effect"],
+                               "explanation_ar": _deanonymize_display(
+                                   pe["explanation_ar"], room),
+                               "audio": _anchor(room, pe["segment_ids"], pe["quote"])}
+                              if pe else None),
+                # قاعدة الكلمة الأخيرة: raised where nobody could answer it
+                # and nothing pre-answered it — displayed as untested.
+                "untested": bool(not arg.get("answerable")
+                                 and arg["id"] not in (preempts or {})),
             })
         out[side] = {
             "arguments": args,
@@ -903,11 +1000,13 @@ def build_verdict(room: dict) -> dict:
     fallacies, soundness = merge_findings(probes)
     for f in fallacies:  # severity is rule-derived from linkage
         f["severity"] = _severity_final(f, maps)
+    preempts = merge_preemptions(probes)
     axes_scores, axes_spread = merge_axes(probes, _inapplicable_axes(room))
 
     # Scores (consensus) + per-probe winner votes.
     scores = {s: compute_score(_score_inputs(s, maps,
-              {k: v for k, v in arg_results.items()}, fallacies, soundness))
+              {k: v for k, v in arg_results.items()}, fallacies, soundness,
+              preempts))
               for s in ("a", "b")}
     margin = abs(scores["a"]["score"] - scores["b"]["score"])
     score_winner = ("a" if scores["a"]["score"] > scores["b"]["score"]
@@ -950,7 +1049,8 @@ def build_verdict(room: dict) -> dict:
                    for q in s["quotes"]],
     } for s in soundness]
 
-    results = _results_block(maps, arg_results, fallacies, soundness, scores, winner)
+    results = _results_block(maps, arg_results, fallacies, soundness, scores,
+                             winner, preempts)
     narrative = _run_synthesis(room, results, tier)
     narrative["reasoning_ar"] = _deanonymize_display(narrative["reasoning_ar"], room)
     if narrative["key_moment"]:
@@ -969,7 +1069,7 @@ def build_verdict(room: dict) -> dict:
         "margin": {"value": round(margin, 1), "band": band},
         "score": {s: scores[s]["score"] for s in ("a", "b")},
         "score_breakdown": scores,
-        "analysis": _display_map(room, maps, arg_results),
+        "analysis": _display_map(room, maps, arg_results, preempts),
         "soundness": soundness_cards,
         "external_claims": _external_claims(maps),
         "fallacies": cards,
