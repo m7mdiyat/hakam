@@ -96,6 +96,11 @@ SPECTATOR_PRESENCE_BUMP_SECONDS = _int("HAKAM_SPECTATOR_PRESENCE_BUMP_SECONDS", 
 SPECTATOR_PRESENCE_TTL_SECONDS = _int("HAKAM_SPECTATOR_PRESENCE_TTL_SECONDS", 30)
 # Room hard-expires (410) this many hours after creation; also drives Firestore TTL.
 ROOM_TTL_HOURS = _int("HAKAM_ROOM_TTL_HOURS", 24)
+# Shared-verdict snapshots («شارك الحكم» links) live this long. Their audio
+# copies sit under the bucket's shared/ prefix, whose lifecycle rule must
+# match this number; the Firestore TTL policy on shared.expires_at is lazy,
+# so reads also enforce expiry themselves.
+SHARE_TTL_DAYS = _int("HAKAM_SHARE_TTL_DAYS", 7)
 
 # --- Upload limits ----------------------------------------------------------
 # Independent server-side byte cap (UI soft-stop is not trusted). ~2 min Opus is

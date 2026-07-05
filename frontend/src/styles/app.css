@@ -582,6 +582,8 @@ button { font-family: inherit; }
 /* axis structurally inapplicable for one side (no turn after the opponent) */
 .axis-inapp { font-size: 11.5px; color: var(--muted-2); font-style: normal; }
 .radar-note { font-size: 11.5px; color: var(--muted-2); text-align: center; padding: 4px 10px 2px; }
+/* shared verdict (/v/): expiry story */
+.share-expired-note { font-size: 13px; color: var(--muted); line-height: 1.9; margin: 10px 0 18px; }
 .arg-empty {
   border: 1px dashed var(--coral-line); border-radius: var(--r-sm);
   padding: 10px 14px; display: flex; flex-direction: column; gap: 6px;

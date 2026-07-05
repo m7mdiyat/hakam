@@ -106,4 +106,16 @@ export const api = {
     if (!res.ok) throw new Error('audio_fetch_failed');
     return URL.createObjectURL(await res.blob());
   },
+
+  // «شارك الحكم»: publish the verdict as a 7-day public snapshot link.
+  shareVerdict: (code, token) =>
+    fetch(`${API}/rooms/${code}/share`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),
+
+  getShared: (id) => fetch(`${API}/shared/${id}`).then(handle),
+
+  fetchSharedAudioUrl: async (id, turn) => {
+    const res = await fetch(`${API}/shared/${id}/audio/${turn}`);
+    if (!res.ok) throw new Error('audio_fetch_failed');
+    return URL.createObjectURL(await res.blob());
+  },
 };

@@ -264,6 +264,64 @@ def rematch_room(old: dict, new_code: str, now: Optional[datetime] = None) -> di
     return room
 
 
+def shared_snapshot(room: dict, share_id: str, now: Optional[datetime] = None) -> dict:
+    """Public, self-contained copy of a judged debate for the «شارك الحكم»
+    link. Built by WHITELIST, never by copying the room and stripping — the
+    snapshot is world-readable, so tokens and plumbing must be structurally
+    unable to leak (a guard test walks the doc for secret-looking keys).
+    turns[].audio_src is a server-side staging field: the share endpoint
+    replaces it with the shared/ copy's uri before persisting."""
+    now = now or now_utc()
+    turns = []
+    for t in room["turns"]:
+        tr = t.get("transcript") or {}
+        snap_tr = {"status": tr.get("status"),
+                   "segments": [{"i": s["i"], "start_s": s["start_s"],
+                                 "end_s": s["end_s"], "text": s["text"]}
+                                for s in tr.get("segments") or []]}
+        if tr.get("reason"):
+            snap_tr["reason"] = tr["reason"]
+        turns.append({
+            "turn": t["turn"], "debater": t["debater"],
+            "duration_s": t.get("duration_s"),
+            "forfeited": bool(t.get("forfeited")),
+            "transcript": snap_tr,
+            "audio_uri": None,
+            "audio_src": t.get("audio_m4a_uri"),
+        })
+    return {
+        "share_id": share_id,
+        "topic": room.get("topic") or "",
+        "format": {"rounds_per_side": (room.get("format") or {}).get("rounds_per_side")},
+        "debaters": {s: {"name": room["debaters"][s].get("name") or "",
+                         "claim": room["debaters"][s].get("claim") or ""}
+                     for s in SIDES},
+        "verdict": room["verdict"],
+        "turns": turns,
+        "created_at": now,
+        "expires_at": now + timedelta(days=config.SHARE_TTL_DAYS),
+    }
+
+
+def shared_public_view(doc: dict) -> dict:
+    """Client shape for GET /shared/{id} — mirrors the room public_view keys
+    the verdict screen reads, so the frontend reuses its renderer as-is."""
+    return {
+        "share_id": doc["share_id"],
+        "topic": doc["topic"],
+        "format": doc.get("format"),
+        "debaters": doc["debaters"],
+        "verdict": doc["verdict"],
+        "created_at": doc["created_at"].isoformat(),
+        "turns": [{
+            "turn": t["turn"], "debater": t["debater"],
+            "duration_s": t.get("duration_s"), "forfeited": t.get("forfeited"),
+            "transcript": t.get("transcript"),
+            "audio": bool(t.get("audio_uri")),
+        } for t in doc["turns"]],
+    }
+
+
 def _begin_turn_prep(room: dict, now: datetime) -> None:
     """A turn just became active: the speaking clock does NOT run yet — the
     debater gets a prep window to tap the mic (turns/start)."""

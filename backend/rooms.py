@@ -13,7 +13,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from . import config
 from . import state as S
-from .codes import gen_code, gen_token, normalize_code
+from .codes import gen_code, gen_share_id, gen_token, normalize_code
 from .store import AlreadyExists, NotFound, get_store
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -499,6 +499,76 @@ def rematch(code):
         room = get_store().update(normalize_code(code), mut)
         return jsonify({"code": room["rematch"]["code"]})
     raise ApiError(503, "code_exhausted", "تعذّر إنشاء رمز. حاول مجددًا.")
+
+
+@api.post("/rooms/<code>/share")
+def share_room(code):
+    """Either debater publishes the verdict as a standalone link: a sanitized
+    snapshot (state.shared_snapshot — whitelist, no tokens) under an
+    unguessable id, with the turn audio copied to the bucket's shared/ prefix
+    so playback outlives the 2-day room audio. Idempotent: one link per room;
+    a racing second click returns the first link (its orphan snapshot simply
+    expires with the TTL, like a lost rematch room)."""
+    room = _load(code)
+    _require_side(room)
+    if not room.get("verdict"):
+        raise ApiError(409, "no_verdict", "المشاركة متاحة بعد صدور الحُكْم.")
+    if room.get("share_id"):
+        return jsonify({"share_id": room["share_id"]})
+
+    share_id = gen_share_id()
+    snap = S.shared_snapshot(room, share_id)
+    from .storage import get_storage
+    for t in snap["turns"]:
+        src = t.pop("audio_src", None)
+        if src:
+            try:
+                t["audio_uri"] = get_storage().copy_shared(src, share_id)
+            except Exception:  # missing blob degrades playback, never the share
+                t["audio_uri"] = None
+    get_store().create_doc("shared", share_id, snap)
+
+    def mut(r: dict):
+        if not r.get("share_id"):
+            r["share_id"] = share_id
+
+    room = get_store().update(normalize_code(code), mut)
+    return jsonify({"share_id": room["share_id"]})
+
+
+def _load_shared(share_id: str) -> dict:
+    """Snapshot or the honest expiry story: Firestore TTL deletion is lazy,
+    so reads enforce expires_at themselves; a TTL-deleted (or simply wrong)
+    id gets the same «انتهت صلاحية» message — indistinguishable by design,
+    and the friendlier reading for stale links."""
+    doc = get_store().get_doc("shared", "".join(
+        c for c in (share_id or "").strip().upper() if c.isalnum()))
+    if doc is None:
+        raise ApiError(404, "expired",
+                       "انتهت صلاحية هذا الحُكْم أو أن الرابط غير صحيح.")
+    if S.now_utc() > doc["expires_at"]:
+        raise ApiError(410, "expired", "انتهت صلاحية هذا الحُكْم.")
+    return doc
+
+
+@api.get("/shared/<share_id>")
+def get_shared(share_id):
+    return jsonify(S.shared_public_view(_load_shared(share_id)))
+
+
+@api.get("/shared/<share_id>/audio/<turn>")
+def shared_audio(share_id, turn):
+    doc = _load_shared(share_id)
+    entry = next((t for t in doc["turns"]
+                  if t["turn"] == turn and t.get("audio_uri")), None)
+    if entry is None:
+        raise ApiError(404, "no_audio", "لا يوجد تسجيل لهذه الجولة.")
+    from .storage import get_storage
+    data = get_storage().read(entry["audio_uri"])
+    resp = Response(data, mimetype="audio/mp4")
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    resp.headers["Accept-Ranges"] = "none"
+    return resp
 
 
 @api.post("/internal/transcribe")

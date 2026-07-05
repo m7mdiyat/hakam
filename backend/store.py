@@ -94,6 +94,18 @@ class FirestoreStore:
             room = self.update(code, lambda r: S.reconcile(r, S.now_utc()))
         return room
 
+    # Generic single-doc access for auxiliary collections (shared verdicts).
+    def create_doc(self, collection: str, doc_id: str, data: dict) -> None:
+        from google.api_core import exceptions as gexc
+        try:
+            self.db.collection(collection).document(doc_id).create(data)
+        except gexc.AlreadyExists as e:
+            raise AlreadyExists(doc_id) from e
+
+    def get_doc(self, collection: str, doc_id: str) -> Optional[dict]:
+        snap = self.db.collection(collection).document(doc_id).get()
+        return snap.to_dict() if snap.exists else None
+
     def rate_check(self, key: str, limit: int, window_s: int) -> bool:
         firestore = self._firestore
         ref = self.db.collection(self.RATE_COLLECTION).document(key)
@@ -217,6 +229,21 @@ class LocalStore:
             if S.reconcile(room, S.now_utc()):
                 self._write(path, room)
             return room
+
+    def _doc_path(self, collection: str, doc_id: str) -> Path:
+        safe = "".join(c if c.isalnum() else "_" for c in f"{collection}_{doc_id}")
+        return self.dir / f"doc_{safe}.json"
+
+    def create_doc(self, collection: str, doc_id: str, data: dict) -> None:
+        with self._FileLock(self):
+            path = self._doc_path(collection, doc_id)
+            if path.exists():
+                raise AlreadyExists(doc_id)
+            self._write(path, data)
+
+    def get_doc(self, collection: str, doc_id: str) -> Optional[dict]:
+        with self._FileLock(self):
+            return self._read(self._doc_path(collection, doc_id))
 
     def rate_check(self, key: str, limit: int, window_s: int) -> bool:
         with self._FileLock(self):

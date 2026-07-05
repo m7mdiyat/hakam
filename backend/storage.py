@@ -54,6 +54,17 @@ class GcsStorage:
         blob = bucket.blob(parsed.path.lstrip("/"))
         return blob.download_as_bytes()
 
+    def copy_shared(self, uri: str, share_id: str) -> str:
+        """Server-side copy of a room blob under shared/{id}/ — the shared
+        prefix carries its own (longer) lifecycle rule, so share links
+        outlive the 2-day room audio."""
+        parsed = urlparse(uri)
+        src_bucket = self._client.bucket(parsed.netloc)
+        src = src_bucket.blob(parsed.path.lstrip("/"))
+        dest_name = f"shared/{share_id}/{parsed.path.rsplit('/', 1)[-1]}"
+        src_bucket.copy_blob(src, self._bucket, dest_name)
+        return f"gs://{config.AUDIO_BUCKET}/{dest_name}"
+
 
 class LocalStorage:
     def __init__(self):
@@ -73,6 +84,15 @@ class LocalStorage:
         rel = uri[len("local://"):] if uri.startswith("local://") else uri
         with open(self.root / rel, "rb") as f:
             return f.read()
+
+    def copy_shared(self, uri: str, share_id: str) -> str:
+        rel = uri[len("local://"):] if uri.startswith("local://") else uri
+        dest_rel = f"shared/{share_id}/{rel.rsplit('/', 1)[-1]}"
+        dest = self.root / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.root / rel, "rb") as src, open(dest, "wb") as out:
+            out.write(src.read())
+        return f"local://{dest_rel}"
 
 
 _storage = None

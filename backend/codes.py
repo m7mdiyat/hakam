@@ -19,6 +19,15 @@ def gen_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+SHARE_ID_LENGTH = 16
+
+
+def gen_share_id() -> str:
+    """Public share-link id: unguessable (31^16 ≈ 10^24) yet the same friendly
+    alphabet as room codes — the link IS the access control."""
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(SHARE_ID_LENGTH))
+
+
 _ALPHABET_SET = set(CODE_ALPHABET)
 
 

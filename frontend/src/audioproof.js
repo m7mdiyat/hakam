@@ -12,7 +12,9 @@
 //   for hidden tabs, where rAF doesn't run.
 import { api } from './api.js';
 
-export function createProofPlayer(code, token, onChange) {
+// `fetcher` overrides how a turn's audio URL is obtained (the shared-verdict
+// page has no token — its audio rides the public snapshot endpoints).
+export function createProofPlayer(code, token, onChange, fetcher) {
   const audio = new Audio();
   const urls = {};          // turn -> object URL
   let stopAt = null;
@@ -57,7 +59,9 @@ export function createProofPlayer(code, token, onChange) {
   }
 
   async function urlFor(turn) {
-    if (!urls[turn]) urls[turn] = await api.fetchAudioUrl(code, token, turn);
+    if (!urls[turn]) {
+      urls[turn] = await (fetcher ? fetcher(turn) : api.fetchAudioUrl(code, token, turn));
+    }
     return urls[turn];
   }
 

@@ -5,6 +5,7 @@ import { startPolling } from './poll.js';
 import { mountLanding } from './screens/landing.js';
 import { mountJoin } from './screens/join.js';
 import { mountSpectate } from './screens/spectate.js';
+import { mountShared } from './screens/shared.js';
 import { createRoomView } from './screens/room.js';
 
 const root = document.getElementById('app');
@@ -46,6 +47,8 @@ function route() {
     mounted = mountJoin(screen, { ...ctx, code: codeFrom(path, '/j/') });
   } else if (path.startsWith('/s/')) {
     mounted = mountSpectate(screen, { ...ctx, code: codeFrom(path, '/s/') });
+  } else if (path.startsWith('/v/')) {
+    mounted = mountShared(screen, { ...ctx, id: codeFrom(path, '/v/') });
   } else if (path.startsWith('/r/')) {
     mounted = mountRoom(screen, { ...ctx, code: codeFrom(path, '/r/') });
   } else {

@@ -1,0 +1,12 @@
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {"age": 2, "matchesPrefix": ["rooms/"]}
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {"age": 7, "matchesPrefix": ["shared/"]}
+    }
+  ]
+}

@@ -594,11 +594,24 @@ export function mountVerdict(root, ctx) {
         ).catch(() => toast('تعذّر تشغيل التسجيل'));
       }
     });
-    root.querySelector('[data-share]').addEventListener('click', async () => {
+    root.querySelector('[data-share]').addEventListener('click', async (e) => {
       const text = shareText(state, state.verdict);
+      // Debaters mint the public 7-day snapshot link (idempotent server-side);
+      // spectators can't create it, and a failed snapshot degrades to text.
+      let url = null;
+      if (!spectator) {
+        e.target.disabled = true;
+        try {
+          url = `${location.origin}/v/${(await api.shareVerdict(code, token)).share_id}`;
+        } catch { /* text-only fallback */ }
+        e.target.disabled = false;
+      }
       try {
-        if (navigator.share) await navigator.share({ text });
-        else { await navigator.clipboard.writeText(text); toast('نُسخ الحُكْم'); }
+        if (navigator.share) await navigator.share(url ? { text, url } : { text });
+        else {
+          await navigator.clipboard.writeText(url ? `${text}\n${url}` : text);
+          toast(url ? 'نُسخ الحُكْم مع رابط مشاهدته (صالح ٧ أيام)' : 'نُسخ الحُكْم');
+        }
       } catch { /* share sheet dismissed */ }
     });
     const rematchBtn = root.querySelector('[data-rematch]');
