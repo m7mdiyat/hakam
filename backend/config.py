@@ -175,7 +175,7 @@ FACTCHECK_THINKING_BUDGET = _int("HAKAM_FACTCHECK_THINKING_BUDGET", 512)
 SIJAL_ENABLED = os.environ.get(
     "HAKAM_SIJAL_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 SIJAL_SECONDS = _int("HAKAM_SIJAL_SECONDS", 60)           # open-mic round length
-SIJAL_OFFER_SECONDS = _int("HAKAM_SIJAL_OFFER_SECONDS", 30)  # accept-by window
+SIJAL_OFFER_SECONDS = _int("HAKAM_SIJAL_OFFER_SECONDS", 20)  # accept-by window
 
 # --- Judge ensemble -----------------------------------------------------------
 # One judging run may be claimed at a time; a crashed run's lease expires after

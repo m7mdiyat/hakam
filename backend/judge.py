@@ -22,6 +22,7 @@ never self-reported; answerability rules are mechanical.
 from __future__ import annotations
 
 import logging
+import re
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
@@ -873,6 +874,10 @@ def _deanonymize_display(text: str, room: dict) -> str:
         for pat in (f"المتحدث «{label}»", f"المتحدث ({label})", f"المتحدث {label}",
                     f"المتناظر «{label}»"):
             text = text.replace(pat, names[side])
+    # Models love the em/en dash; in Arabic prose it reads as machine-written.
+    # Swap for the natural Arabic comma (hugging the preceding word) on every
+    # user-facing string the judge emits.
+    text = re.sub(r"\s*[—–]\s*", "، ", text).strip()
     return text
 
 

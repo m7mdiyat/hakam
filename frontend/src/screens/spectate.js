@@ -54,7 +54,7 @@ export function mountSpectate(root, ctx) {
       <div class="screen-body join">
         <div class="topic-pill">${esc(room.topic)}</div>
         <form class="card form-card" data-spectate novalidate>
-          <div class="micro">تابع المناظرة كمشاهد — اسمك يظهر للحاضرين</div>
+          <div class="micro">تابع المناظرة كمشاهد، اسمك يظهر للحاضرين</div>
           <div class="field">
             <label class="micro" for="s-name">اسمك</label>
             <input class="input" id="s-name" data-name maxlength="40" placeholder="اسمك الأول" autocomplete="off" />

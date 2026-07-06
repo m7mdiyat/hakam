@@ -285,7 +285,7 @@ def submit_turn(code):
         # judged. The debater's clock keeps running; they can re-record.
         if audio_stats["max_db"] < config.SILENCE_GATE_DB:
             raise ApiError(400, "silent_audio",
-                           "لم يلتقط الميكروفون أي صوت — تحقق من الميكروفون وحاول مجددًا.")
+                           "لم يلتقط الميكروفون أي صوت، تحقق من الميكروفون وحاول مجددًا.")
         duration_ms = int(duration_s * 1000)
 
     from .storage import get_storage

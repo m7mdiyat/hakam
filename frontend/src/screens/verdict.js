@@ -142,13 +142,13 @@ function axesInnerHtml(state, v) {
   const rows = AXES.map((ax) => {
     const a = v.scores.a[ax], b = v.scores.b[ax];
     const bars = (a == null && b == null)
-      ? '<div class="axis-na">غير منطبق — لم تتح فرصة للرد</div>'
+      ? '<div class="axis-na">غير منطبق، لم تتح فرصة للرد</div>'
       : ['a', 'b'].map((s) => {
         const val = v.scores[s][ax];
         // null = structurally inapplicable (no turn after the opponent) —
         // say so; an empty bar reads as a zero SCORE, which it is not.
         return val == null
-          ? '<div class="axis-bar-row"><span class="axis-inapp">لم تتح له فرصة الرد — لا يُحتسب</span></div>'
+          ? '<div class="axis-bar-row"><span class="axis-inapp">لم تتح له فرصة الرد، لا يُحتسب</span></div>'
           : `<div class="axis-bar-row"><span class="axis-val">${val}</span>
                <div class="axis-bar"><i style="width:${val}%;background:${sideColor(s)}"></i></div></div>`;
       }).join('');
@@ -222,7 +222,7 @@ function argCardHtml(state, side, arg, rebuttedBy, factScoring) {
         : `أُضعفت بشدة: مقدمة خالفت المصادر (×${arg.fact_factor})`)
       : `خُفّضت: واقعة صحيحة جزئيًا (×${arg.fact_factor})`;
     factHit = `<div class="arg-facthit">${what}${factScoring === false
-      ? ' — لا يؤثر في الدرجة حاليًا' : ''}</div>`;
+      ? '، لا يؤثر في الدرجة حاليًا' : ''}</div>`;
   }
   const implicit = arg.implicit_premises.map((ip) => `
     <div class="arg-line arg-implicit">
@@ -248,7 +248,7 @@ function argCardHtml(state, side, arg, rebuttedBy, factScoring) {
       ${arg.preempted.explanation_ar ? `<div class="arg-preempt-why">${esc(arg.preempted.explanation_ar)}</div>` : ''}
     </div>` : '';
   const untested = arg.untested
-    ? '<span class="arg-badge arg-untested" title="قيلت في آخر مداخلة فلم يتسنَّ لأحد الرد عليها؛ تُحتسب بوزن مخفف">طُرحت في آخر مداخلة — لم تُختبر</span>'
+    ? '<span class="arg-badge arg-untested" title="قيلت في آخر مداخلة فلم يتسنَّ لأحد الرد عليها؛ تُحتسب بوزن مخفف">طُرحت في آخر مداخلة، لم تُختبر</span>'
     : '';
   return `
     <div class="arg-card" id="arg-${arg.id}" style="--c:${sideColor(side)}">
@@ -350,7 +350,7 @@ function factsHtml(state, fc) {
     <div class="v-panel">
       <div class="panel-head"><span>تحقق الوقائع</span></div>
       <div class="fal-list">${cards}</div>
-      <div class="ext-note">تحقق آلي بالبحث في مصادر عامة — الادعاء الذي تعذّر
+      <div class="ext-note">تحقق آلي بالبحث في مصادر عامة، الادعاء الذي تعذّر
         التحقق منه لا يُحاسَب عليه صاحبه${fc.scoring === false
     ? '، ونتائج التحقق معروضة للاطلاع ولا تؤثر في الدرجة حاليًا' : ''}.</div>
     </div>`;
@@ -374,12 +374,12 @@ function sijalHtml(state, v) {
   return `
     <div class="v-panel sijal-panel">
       <button class="v-collapse-head" type="button" data-collapse>
-        <span>السِّجال — جولة ختامية حرة</span><span class="chev">▾</span>
+        <span>السِّجال، جولة ختامية حرة</span><span class="chev">▾</span>
       </button>
       <div class="v-collapse-body" hidden>
         ${plays ? `<div class="sijal-plays">${plays}</div>` : ''}
         ${lines || '<div class="v-empty">لم يُسمع كلام في السجال.</div>'}
-        <div class="ext-note">مداخلات حرة بمِيكروفون مفتوح — استرشد بها الحَكَم
+        <div class="ext-note">مداخلات حرة بمِيكروفون مفتوح، استرشد بها الحَكَم
           في قراءة الموقف، ولم تُغيّر الدرجة.</div>
       </div>
     </div>`;
@@ -418,12 +418,12 @@ function fallaciesHtml(state, v) {
         <span class="fal-sev fal-sev-${f.severity}">${SEV_AR[f.severity] || ''}</span>
       </div>
       <div class="fal-meta">${esc(nameOf(state, f.speaker))} · ${turnLabel(f.turn)}${
-        f.argument_id ? ` · <button class="linklike fal-link" type="button" data-goto="arg-${f.argument_id}">ضمن حجته — اعرضها</button>` : ''}</div>
+        f.argument_id ? ` · <button class="linklike fal-link" type="button" data-goto="arg-${f.argument_id}">ضمن حجته، اعرضها</button>` : ''}</div>
       <blockquote class="fal-quote">«${esc(f.quote)}»</blockquote>
       <div class="fal-why">${esc(f.explanation_ar)}</div>
       ${proofBtn(`fal-${i}`, f.audio)}
     </div>`).join('')
-    : '<div class="v-empty">لم تُرصد مغالطات — مناظرة نظيفة 👏</div>';
+    : '<div class="v-empty">لم تُرصد مغالطات، مناظرة نظيفة 👏</div>';
   return `
     <div class="v-panel">
       <div class="panel-head"><span>سجل المغالطات</span></div>
@@ -573,7 +573,7 @@ export function deliberatingHtml(state, failed) {
 function shareText(state, v) {
   const lines = [`الحُكْم في مناظرة: ${state.topic}`];
   lines.push(v.winner == null
-    ? 'النتيجة: متقاربة — لا فائز محسوم'
+    ? 'النتيجة: متقاربة، لا فائز محسوم'
     : `الفائز: ${nameOf(state, v.winner)} (${BAND_AR[v.margin.band] || ''})`);
   ['a', 'b'].forEach((s) => lines.push(
     `${nameOf(state, s)}: ${isV2(v) ? Math.round(v.score[s]) : meanScore(v.scores[s])}/100`));
@@ -688,7 +688,7 @@ export function mountVerdict(root, ctx) {
         try {
           shareUrl = `${location.origin}/v/${(await api.shareVerdict(code, token)).share_id}`;
         } catch {
-          toast('تعذّر إنشاء رابط المشاهدة — سيُنسخ النص فقط');
+          toast('تعذّر إنشاء رابط المشاهدة، سيُنسخ النص فقط');
         }
         btn.disabled = false;
       }
@@ -718,7 +718,7 @@ export function mountVerdict(root, ctx) {
         // Creator only: the server links a fresh room (same seats, same
         // tokens) and the opponent's poll follows rematch_code automatically.
         if (ctx.creds.side !== 'a') {
-          toast('منشئ الجلسة فقط يبدأ الإعادة — ستنتقل تلقائيًا حين يبدأها');
+          toast('منشئ الجلسة فقط يبدأ الإعادة، ستنتقل تلقائيًا حين يبدأها');
           return;
         }
         e.target.disabled = true;
@@ -754,8 +754,8 @@ export function mountVerdict(root, ctx) {
       // The creator started a rematch: both clients follow it (the creator
       // already navigated from the click; this catches the opponent's poll).
       if (state.rematch_code && !followedRematch) {
-        toast(spectator ? 'بدأت مناظرة جديدة — جارٍ الانتقال…'
-          : 'مناظرة جديدة مع نفس الخصم — جارٍ الانتقال…');
+        toast(spectator ? 'بدأت مناظرة جديدة، جارٍ الانتقال…'
+          : 'مناظرة جديدة مع نفس الخصم، جارٍ الانتقال…');
         goRematch(state.rematch_code);
         return;
       }

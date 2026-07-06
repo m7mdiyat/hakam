@@ -26,6 +26,14 @@ export function createRoomView(root, ctx) {
   function mountKind(k) {
     if (sub && sub.unmount) sub.unmount();
     root.innerHTML = '';
+    // Smooth cross-fade between phases (last speech -> سجال -> deliberation ->
+    // verdict): a subtle fade+lift on the new screen reads far more polished
+    // than an instant swap. Cosmetic only; the sub-screen mounts as usual.
+    if (kind !== null) {
+      root.classList.remove('screen-enter');
+      void root.offsetWidth;
+      root.classList.add('screen-enter');
+    }
     kind = k;
     if (k === 'lobby') {
       sub = ctx.role === 'spectator' ? mountSpectatorLobby(root, ctx) : mountLobby(root, ctx);
@@ -35,7 +43,7 @@ export function createRoomView(root, ctx) {
       sub = ctx.role === 'spectator'
         ? mountMessage(root, {
           label: 'سجال', title: 'جولة السِّجال',
-          body: 'يتبادل المتناظران مداخلة ختامية حرة — يظهر الحُكم بعد قليل.',
+          body: 'يتبادل المتناظران مداخلة ختامية حرة، يظهر الحُكم بعد قليل.',
         })
         : mountSijal(root, ctx);
     } else if (k === 'verdict') sub = mountVerdict(root, ctx);

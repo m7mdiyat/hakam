@@ -53,7 +53,7 @@ export function mountSpectatorLobby(root, ctx) {
       </div>
       <div class="format-row" data-format></div>
       <div data-spectators></div>
-      <div class="micro-2 spec-note">أنت تشاهد — تبدأ المناظرة حين يجهز الطرفان</div>
+      <div class="micro-2 spec-note">أنت تشاهد، تبدأ المناظرة حين يجهز الطرفان</div>
     </div>`;
   wireSpectatorShare(root, ctx.code);
 

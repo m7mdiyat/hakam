@@ -583,25 +583,52 @@ button { font-family: inherit; }
 }
 .fact-src:hover { color: var(--gold); border-color: rgba(201, 164, 92, 0.55); }
 
+/* Smooth phase cross-fade (room.js swaps screen categories) */
+.screen-enter { animation: screen-enter 0.42s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes screen-enter {
+  0% { opacity: 0; transform: translateY(8px) scale(0.994); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .screen-enter { animation: none; } }
+
 /* ===== سجال (open-mic closing round) ===================================== */
-.sijal-offer { display: flex; flex-direction: column; align-items: center;
-  gap: 20px; text-align: center; padding-top: 14px; }
-.sijal-blast { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.sijal-blast.in .sijal-bolt { animation: sijal-bolt 0.7s cubic-bezier(.2,.9,.2,1.2) both; }
-.sijal-blast.in .sijal-title { animation: sijal-rise 0.55s .12s cubic-bezier(.2,.9,.2,1.1) both; }
-.sijal-blast.in .sijal-side.a { animation: sijal-in-r 0.5s .05s cubic-bezier(.2,.9,.2,1.3) both; }
-.sijal-blast.in .sijal-side.b { animation: sijal-in-l 0.5s .05s cubic-bezier(.2,.9,.2,1.3) both; }
-.sijal-blast.in .sijal-sub { animation: sijal-rise 0.5s .28s ease both; }
-.sijal-bolt { font-size: 54px; line-height: 1;
-  filter: drop-shadow(0 0 22px rgba(201, 164, 92, 0.6)); }
+.sijal-offer { position: relative; display: flex; flex-direction: column;
+  align-items: center; gap: 20px; text-align: center; padding-top: 22px; }
+/* Full-screen gold flash on reveal (fires once). */
+.sijal-flash { position: absolute; inset: -40px; z-index: 0; pointer-events: none;
+  background: radial-gradient(circle at 50% 34%, rgba(201,164,92,0.5), transparent 60%);
+  opacity: 0; }
+.sijal-flash.go { animation: sijal-flash 0.6s ease-out both; }
+.sijal-blast { position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.sijal-blast.in .sijal-bolt { animation: sijal-bolt 0.6s cubic-bezier(.2,.9,.2,1.4) both; }
+.sijal-blast.in .sijal-shock { animation: sijal-shock 0.7s .06s ease-out both; }
+.sijal-blast.in .sijal-title { animation: sijal-rise 0.5s .16s cubic-bezier(.2,.9,.2,1.1) both; }
+.sijal-blast.in .sijal-side.a { animation: sijal-in-r 0.45s .1s cubic-bezier(.2,.9,.2,1.5) both; }
+.sijal-blast.in .sijal-side.b { animation: sijal-in-l 0.45s .1s cubic-bezier(.2,.9,.2,1.5) both; }
+.sijal-blast.in .sijal-vs { animation: sijal-pop 0.4s .26s cubic-bezier(.2,.9,.2,1.6) both; }
+.sijal-blast.in .sijal-sub { animation: sijal-rise 0.5s .3s ease both; }
+.sijal-bolt-wrap { position: relative; display: grid; place-items: center;
+  width: 84px; height: 84px; }
+.sijal-shock { position: absolute; width: 60px; height: 60px; border-radius: 50%;
+  border: 2px solid var(--gold); opacity: 0; }
+.sijal-bolt { position: relative; font-size: 56px; line-height: 1;
+  filter: drop-shadow(0 0 26px rgba(201, 164, 92, 0.7));
+  animation: sijal-bolt-idle 2.4s ease-in-out 0.9s infinite; }
 .sijal-clash { display: flex; align-items: center; gap: 16px; }
-.sijal-side { width: 46px; height: 6px; border-radius: 999px; background: var(--c);
-  box-shadow: 0 0 16px var(--c); display: block; }
+.sijal-side { width: 48px; height: 6px; border-radius: 999px; background: var(--c);
+  box-shadow: 0 0 18px var(--c); display: block; }
 .sijal-vs { color: var(--muted); font-weight: 700; font-size: 18px; }
-.sijal-title { font-size: 34px; font-weight: 700; color: var(--ink);
+.sijal-title { font-size: 36px; font-weight: 700; color: var(--ink);
   font-family: var(--font-brand, inherit); letter-spacing: -0.5px; }
 .sijal-sub { font-size: 14px; color: var(--muted-3); max-width: 30ch; line-height: 1.9; }
-.sijal-status { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.sijal-status { position: relative; z-index: 1;
+  display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.sijal-decide { position: relative; z-index: 1; display: flex; flex-direction: column;
+  align-items: center; gap: 12px; width: 100%; }
+.sijal-timer { font-size: 12.5px; color: var(--muted); }
+.sijal-timer .num.hot { color: var(--coral); }
+.sijal-clock.hot { color: var(--coral); }
 .sijal-chip { --c: var(--muted); font-size: 12.5px; color: var(--muted-2);
   border: 1px solid var(--line-12); border-radius: 999px; padding: 5px 14px; }
 .sijal-chip.yes { color: var(--c); border-color: var(--c); }
@@ -633,16 +660,24 @@ button { font-family: inherit; }
   margin-top: 34px; }
 .sijal-hint { font-size: 13px; color: var(--muted); text-align: center;
   max-width: 34ch; line-height: 1.9; }
-@keyframes sijal-bolt { 0% { transform: scale(0) rotate(-25deg); opacity: 0; }
+@keyframes sijal-flash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes sijal-bolt { 0% { transform: scale(0) rotate(-30deg); opacity: 0; }
+  60% { transform: scale(1.25) rotate(6deg); opacity: 1; }
   100% { transform: scale(1) rotate(0); opacity: 1; } }
-@keyframes sijal-rise { 0% { transform: translateY(14px); opacity: 0; }
+@keyframes sijal-bolt-idle { 0%, 100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-3px) rotate(-3deg); } }
+@keyframes sijal-shock { 0% { transform: scale(0.3); opacity: 0.9; }
+  100% { transform: scale(2.6); opacity: 0; } }
+@keyframes sijal-rise { 0% { transform: translateY(16px); opacity: 0; }
   100% { transform: translateY(0); opacity: 1; } }
-@keyframes sijal-in-r { 0% { transform: translateX(30px) scaleX(0.2); opacity: 0; }
+@keyframes sijal-pop { 0% { transform: scale(0); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; } }
+@keyframes sijal-in-r { 0% { transform: translateX(40px) scaleX(0.1); opacity: 0; }
   100% { transform: translateX(0) scaleX(1); opacity: 1; } }
-@keyframes sijal-in-l { 0% { transform: translateX(-30px) scaleX(0.2); opacity: 0; }
+@keyframes sijal-in-l { 0% { transform: translateX(-40px) scaleX(0.1); opacity: 0; }
   100% { transform: translateX(0) scaleX(1); opacity: 1; } }
 @keyframes sijal-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(201, 164, 92, 0); }
-  50% { box-shadow: 0 0 0 10px rgba(201, 164, 92, 0.12); } }
+  50% { box-shadow: 0 0 0 12px rgba(201, 164, 92, 0.14); } }
 
 /* Verdict panel: the سجال closing exchange (display-only) */
 .sijal-panel .sijal-line { display: flex; gap: 8px; align-items: baseline;
@@ -740,7 +775,7 @@ button { font-family: inherit; }
 }
 
 /* ==========================================================================
-   Desktop layout (>= 900px) — the «سطح المكتب — التصميم الأساسي» reference.
+   Desktop layout (>= 900px) — the «سطح المكتب، التصميم الأساسي» reference.
    Below 900px the mobile phone-frame layout above is untouched. This block is
    last in source order so it wins over the >=480px device-frame rules.
    ========================================================================== */

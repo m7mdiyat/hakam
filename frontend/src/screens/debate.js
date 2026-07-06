@@ -44,7 +44,7 @@ export function mountDebate(root, ctx) {
         <span class="live-dot" data-live-dot></span>
         <span class="live-status" data-live-status></span>
         <button class="live-pill" data-live-self type="button"
-          title="بث صوتك المباشر للخصم — كتمه لا يؤثر على تسجيل جولتك">
+          title="بث صوتك المباشر للخصم، كتمه لا يؤثر على تسجيل جولتك">
           <span class="live-ico" data-live-self-ico></span><span data-live-self-txt></span>
         </button>
         <button class="live-pill" data-live-peer type="button"
@@ -133,7 +133,7 @@ export function mountDebate(root, ctx) {
         : state === 'failed' ? 'تعذّر الاتصال المباشر'
           // Honest terminal state (never connected across retries): the
           // debate itself is unaffected — recordings arrive after each turn.
-          : state === 'unreachable' ? 'تعذّر الاتصال المباشر — التسجيلات تصل بعد كل مداخلة' : '';
+          : state === 'unreachable' ? 'تعذّر الاتصال المباشر، التسجيلات تصل بعد كل مداخلة' : '';
     const ct = lastState && lastState.current_turn;
     const turnSide = ct ? sideOf(ct) : null;
     const selfPill = root.querySelector('[data-live-self]');
@@ -182,7 +182,7 @@ export function mountDebate(root, ctx) {
       `live-dot${state === 'connected' ? ' on' : state === 'failed' ? ' err' : ' busy'}`;
     root.querySelector('[data-speclive-status]').textContent =
       state === 'connecting' ? 'جارٍ فتح البث…'
-        : state === 'failed' ? 'تعذّر البث المباشر — التسجيلات تصل بعد كل مداخلة' : '';
+        : state === 'failed' ? 'تعذّر البث المباشر، التسجيلات تصل بعد كل مداخلة' : '';
     const pill = root.querySelector('[data-speclive-mute]');
     pill.classList.toggle('is-off', muted);
     root.querySelector('[data-speclive-mute-ico]').innerHTML = muted ? volumeOff(15) : volume(15);
@@ -248,7 +248,7 @@ export function mountDebate(root, ctx) {
   function startRecTick() {
     recStartedAt = performance.now();
     const paint = () => {
-      micLabel.textContent = `جارٍ التسجيل ${fmtClock(performance.now() - recStartedAt)} — اضغط للإرسال`;
+      micLabel.textContent = `جارٍ التسجيل ${fmtClock(performance.now() - recStartedAt)}، اضغط للإرسال`;
     };
     paint();
     recTick = setInterval(paint, 500);
@@ -350,7 +350,7 @@ export function mountDebate(root, ctx) {
         recording = false;
         refreshMic();
         toast(e && e.name === 'NotAllowedError'
-          ? 'الوصول للميكروفون مرفوض — فعّله من إعدادات المتصفح لهذا الموقع'
+          ? 'الوصول للميكروفون مرفوض، فعّله من إعدادات المتصفح لهذا الموقع'
           : 'تعذّر الوصول للميكروفون');
       },
     });
@@ -385,8 +385,8 @@ export function mountDebate(root, ctx) {
   function onDiscarded(reason) {
     recording = false;
     refreshMic();
-    if (reason === 'too_short') toast('التسجيل قصير جدًا — حاول مجددًا');
-    else if (reason === 'empty' || reason === 'error') toast('تعذّر التسجيل — حاول مجددًا');
+    if (reason === 'too_short') toast('التسجيل قصير جدًا، حاول مجددًا');
+    else if (reason === 'empty' || reason === 'error') toast('تعذّر التسجيل، حاول مجددًا');
   }
   function stopRec() { if (recording && rec) rec.stop(); }
 
@@ -591,7 +591,7 @@ export function mountDebate(root, ctx) {
         anchor = null;
         clockEl.textContent = fmtClock(secs * 1000);
         if (ringEl) ringEl.setAttribute('stroke-dashoffset', '0');
-        const base = side === mine ? 'دورك — اضغط للتحدث' : `بانتظار ${nm}`;
+        const base = side === mine ? 'دورك، اضغط للتحدث' : `بانتظار ${nm}`;
         prep = state.turn_prep_deadline_at ? {
           deadline: Date.parse(state.turn_prep_deadline_at),
           serverNow: Date.parse(state.server_now),
@@ -617,7 +617,7 @@ export function mountDebate(root, ctx) {
       } else {
         recording = false;   // now, not in onDiscard: the next poll must not re-cancel/re-toast
         rec.cancel();
-        toast('انتهى وقت الجولة — لم يُرسل التسجيل');
+        toast('انتهى وقت الجولة، لم يُرسل التسجيل');
       }
     }
 
@@ -635,7 +635,7 @@ export function mountDebate(root, ctx) {
       finishBtn.disabled = iAsked;
       finishBtn.textContent = iAsked ? 'طلبت الإنهاء' : 'طلب إنهاء المناظرة';
       finishHint.textContent = otherAsked && !iAsked
-        ? 'الطرف الآخر طلب الإنهاء — وافق لإنهاء المناظرة'
+        ? 'الطرف الآخر طلب الإنهاء، وافق لإنهاء المناظرة'
         : 'يتطلب موافقة الطرفين';
       finishHint.classList.toggle('hint-active', otherAsked && !iAsked);
     }
