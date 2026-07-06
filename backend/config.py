@@ -149,6 +149,20 @@ GEMINI_ENABLED = os.environ.get(
 ).strip().lower() in ("1", "true", "yes")
 TRANSCRIBE_ENABLED = GEMINI_ENABLED
 
+# --- Fact-check (فحص الوقائع — grounded verification of external claims) -----
+# Every extraction-flagged external claim gets ONE Google-Search-grounded Flash
+# call (parallel, concurrent with the probes — near-zero added wall clock).
+# FACTCHECK_SCORING is the kill-switch for the SCORE effect only: verification
+# and the verdict-screen display stay on; set 0 to stop fact factors from
+# touching درجة الحجاج if real debates surface false «contradicted» rulings.
+FACTCHECK_ENABLED = GEMINI_ENABLED and os.environ.get(
+    "HAKAM_FACTCHECK_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+FACTCHECK_SCORING = os.environ.get(
+    "HAKAM_FACTCHECK_SCORING", "1").strip().lower() in ("1", "true", "yes")
+# Bounds cost + latency per debate; extraction rarely flags more anyway.
+FACTCHECK_CAP = _int("HAKAM_FACTCHECK_CAP", 8)
+FACTCHECK_THINKING_BUDGET = _int("HAKAM_FACTCHECK_THINKING_BUDGET", 512)
+
 # --- Judge ensemble -----------------------------------------------------------
 # One judging run may be claimed at a time; a crashed run's lease expires after
 # this many seconds so a client retrigger (POST /judge) can reclaim it.

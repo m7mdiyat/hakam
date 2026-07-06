@@ -42,6 +42,62 @@ def audio_part(data: bytes, mime_type: str = "audio/mp4"):
     return types.Part.from_bytes(data=data, mime_type=mime_type)
 
 
+def generate_grounded_json(
+    prompt: str,
+    schema: dict,
+    thinking_budget: int = 512,
+    temperature: float = 0.0,
+    retries: int = 1,
+) -> "tuple[Any, list]":
+    """Structured output WITH the Google Search tool -> (value, sources).
+
+    sources = [{"title", "uri"}] read from the response's grounding metadata —
+    Google's redirect links, the only citations allowed to reach a display
+    (a model-written URL inside the JSON body is never trusted). Empty when
+    the model answered without actually searching; callers must treat a
+    punishing verdict with no sources as unverifiable.
+    """
+    from google.genai import types
+
+    cfg = types.GenerateContentConfig(
+        temperature=temperature,
+        candidate_count=1,
+        response_mime_type="application/json",
+        response_schema=schema,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+        http_options=types.HttpOptions(timeout=config.GEMINI_TIMEOUT_S * 1000),
+    )
+    last_err: Optional[Exception] = None
+    for _ in range(retries + 1):
+        try:
+            resp = _get_client().models.generate_content(
+                model=config.GEMINI_MODEL, contents=[prompt], config=cfg
+            )
+            text = resp.text
+            if not text:
+                raise GeminiError("empty model response")
+            value = json.loads(text)
+            sources = []
+            try:
+                gm = resp.candidates[0].grounding_metadata
+                for c in (getattr(gm, "grounding_chunks", None) or []):
+                    web = getattr(c, "web", None)
+                    if web and getattr(web, "uri", None):
+                        sources.append({"title": (getattr(web, "title", "") or "").strip(),
+                                        "uri": web.uri})
+            except Exception:
+                sources = []
+            return value, sources
+        except GeminiError as e:
+            last_err = e
+        except json.JSONDecodeError as e:
+            last_err = GeminiError(f"unparseable model output: {e}")
+        except Exception as e:
+            last_err = GeminiError(f"{type(e).__name__}: {str(e)[:300]}")
+    raise last_err  # type: ignore[misc]
+
+
 def generate_json(
     prompt: str,
     schema: dict,

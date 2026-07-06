@@ -53,18 +53,27 @@ def _match(calc, stored):
     return stored is not None and abs(calc - stored) < 0.02
 
 
-def _side_trace(side, an, fallacies, soundness, breakdown):
+def _side_trace(side, an, fallacies, soundness, breakdown, fact_scoring):
     other = "b" if side == "a" else "a"
     my = (an.get(side) or {}).get("arguments") or []
     opp = (an.get(other) or {}).get("arguments") or []
     strawman = {f["argument_id"] for f in fallacies
                 if f["type"] == "straw_man" and f.get("argument_id")}
 
-    # Survival suffered from the opponent's (non-strawman) rebuttals.
+    def fact_factor(arg):
+        # فحص الوقائع (v2.2): stored on the display map when a claim hit.
+        if not fact_scoring or arg.get("fact_factor") is None:
+            return 1.0
+        return arg["fact_factor"]
+
+    # Survival suffered from the opponent's (non-strawman, non-fact-voided)
+    # rebuttals — a rebuttal on a contradicted claim cannot damage.
     suffered = {}
     for oa in opp:
         r = oa.get("rebuts")
-        if r and oa["id"] not in strawman and r.get("effect") in ("defeated", "weakened"):
+        voided = fact_scoring and oa.get("fact_worst") == "contradicted"
+        if r and oa["id"] not in strawman and not voided \
+                and r.get("effect") in ("defeated", "weakened"):
             f = SURVIVAL[r["effect"]]
             cur = suffered.get(r["target_id"])
             if cur is None or f < cur["factor"]:
@@ -84,11 +93,14 @@ def _side_trace(side, an, fallacies, soundness, breakdown):
         if a.get("untested") and UNTESTED_FACTOR < factor:
             factor, src = UNTESTED_FACTOR, {"kind": "untested",
                                             "factor": UNTESTED_FACTOR}
-        credit = base * factor
+        ff = fact_factor(a)
+        credit = base * factor * ff
         credits.append(credit)
         items.append({"id": a["id"], "weight": a["weight"], "verdict": a["verdict"],
                       "quote": (a.get("conclusion") or {}).get("quote", ""),
                       "base": base, "factor": round(factor, 2), "src": src,
+                      "fact": ({"factor": ff, "worst": a.get("fact_worst")}
+                               if a.get("fact_factor") is not None else None),
                       "credit": round(credit, 3)})
 
     q = construction_quality(credits)
@@ -102,7 +114,8 @@ def _side_trace(side, an, fallacies, soundness, breakdown):
     opp_items = []
     for oa in opp:
         answerable = not (oa.get("untested") or oa.get("preempted"))
-        opp_items.append({"id": oa["id"], "credit": CREDIT.get(oa["verdict"], 0.5),
+        opp_items.append({"id": oa["id"],
+                          "credit": CREDIT.get(oa["verdict"], 0.5) * fact_factor(oa),
                           "answerable": answerable, "addressed": oa["id"] in my_rebuts,
                           "strawman_voided": bool(oa["id"] in
                               {a["rebuts"]["target_id"] for a in my
@@ -216,7 +229,8 @@ def build_trace(v):
     fal = v.get("fallacies") or []
     snd = v.get("soundness") or []
     bk = v.get("score_breakdown") or {}
-    sides = {s: _side_trace(s, an, fal, snd, bk) for s in ("a", "b")}
+    fact_scoring = bool((v.get("fact_checks") or {}).get("scoring"))
+    sides = {s: _side_trace(s, an, fal, snd, bk, fact_scoring) for s in ("a", "b")}
     # Which component actually decided the margin?
     sa, sb = bk.get("a") or {}, bk.get("b") or {}
     parts = [("جودة البناء (Q)", 100.0 * abs((sa.get("q") or 0) - (sb.get("q") or 0))),
@@ -687,9 +701,14 @@ function traceBox(r, s){
     '</span><span class="tscore num">'+(st.score!=null?st.score:"—")+'</span></div>';
   t.items.forEach(it=>{
     const v=VCH[it.verdict]||[it.verdict,"v-mid"];
+    const factPart=it.fact?' × '+it.fact.factor:'';
+    const factWhy=it.fact?' · <span class="why" style="color:var(--warn)">فحص الوقائع: '+
+      (it.fact.worst==="contradicted"?"مقدمة خالفت المصادر":"واقعة صحيحة جزئيًا")+
+      ' (×'+it.fact.factor+')</span>':'';
     h+='<div class="titem"><span class="ref num" onclick="goArg(\''+r.code+'\',\''+it.id+'\')">'+it.id+'</span>'+
       (it.weight==="primary"?" ★":"")+' «'+esc(it.quote.slice(0,60))+(it.quote.length>60?"…":"")+'»<br>'+
-      '<span class="num">'+v[0]+' ('+it.base+') × '+it.factor+' = <b>'+it.credit+'</b></span> — '+factorTxt(r,it.src)+'</div>';
+      '<span class="num">'+v[0]+' ('+it.base+') × '+it.factor+factPart+' = <b>'+it.credit+'</b></span> — '+
+      factorTxt(r,it.src)+factWhy+'</div>';
   });
   if(!t.items.length) h+='<div class="titem why">لا حجج مكتملة'+(t.q_floor?' — أرضية الدعاوى Q = 0.15 (ASSERTION_FLOOR)':'')+'</div>';
   h+='<div class="trow"><span>Q جودة البناء (أفضل تشكيلة مرجّحة)</span><b class="num">'+(st.q!=null?st.q:t.q)+
@@ -783,6 +802,23 @@ function secArgs(r){
       (s.quotes||[]).map(q=>'<div class="qline">'+playBtn(r.code,q.audio)+'<span class="q">«'+esc(q.quote)+'»</span>'+winTxt(q.audio)+'</div>').join("")+
       '<div class="subnote">'+esc(s.explanation_ar)+'</div></div>';});
   if(cards) h+='<div style="margin-top:12px"><div class="colh">بطاقات الخصومات</div>'+cards+'</div>';
+  const fc=v.fact_checks||{};
+  if((fc.claims||[]).length){
+    const FV={supported:["أكدته المصادر","v-good"],partially:["صحيح جزئيًا","v-warn"],
+              contradicted:["خالف المصادر","v-bad"],unverifiable:["تعذّر التحقق","v-mid"]};
+    h+='<div style="margin-top:12px"><div class="colh">تحقق الوقائع'+
+       (fc.scoring===false?' <span class="subnote">(معروض فقط — لا يؤثر في الدرجة)</span>':'')+'</div>'+
+      fc.claims.map(c=>{
+        const fv=FV[c.verdict]||[c.verdict,"v-mid"];
+        return '<div class="fcard"><div class="fhead"><span class="'+cls(c.side)+'">●</span>'+
+          '<span class="fname">'+esc(c.claim_ar)+'</span><span class="vchip '+fv[1]+'">'+fv[0]+'</span>'+
+          '<span class="subnote num">'+(c.argument_ids||[]).join("، ")+'</span></div>'+
+          '<div class="qline">'+playBtn(r.code,c.audio)+'<span class="q">«'+esc(c.quote)+'»</span>'+winTxt(c.audio)+'</div>'+
+          (c.explanation_ar?'<div class="subnote">'+esc(c.explanation_ar)+'</div>':'')+
+          ((c.sources||[]).length?'<div class="subnote">مصادر: '+c.sources.map(s=>
+            '<a href="'+esc(s.uri)+'" target="_blank" class="num">'+esc(s.title||"مصدر")+'</a>').join(" — ")+'</div>':'');
+      }).join("")+'</div>';
+  }
   return h+'</div>';
 }
 function secAxes(r){

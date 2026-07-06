@@ -26,6 +26,10 @@ const AV_AR = { valid: 'سليم البناء', invalid: 'مختل البناء'
 const AV_KIND = { valid: 'good', strong: 'good', invalid: 'bad', weak: 'bad',
                   contested: 'mid' };
 const EFFECT_AR = { defeated: 'أسقطتها', weakened: 'أضعفتها', unaffected: 'لم تؤثر فيها' };
+// فحص الوقائع (v2.2): chip tone per verifier ruling.
+const FACT_KIND = { supported: 'good', partially: 'warn', contradicted: 'bad', unverifiable: 'mid' };
+const FACT_AR = { supported: 'أكدته المصادر', partially: 'صحيح جزئيًا',
+  contradicted: 'خالف المصادر', unverifiable: 'تعذّر التحقق' };
 const PREEMPT_AR = { defeated: 'فأسقطتها معالجتُه', weakened: 'فأضعفتها معالجتُه' };
 const SND_AR = { self_contradiction: 'تناقض ذاتي',
                  unsupported_load_bearing: 'ادعاء مفصلي بلا سند',
@@ -189,19 +193,37 @@ const playChip = (key, audio) => (audio ? `
     data-turn="${audio.turn}" data-start="${audio.start_s}" data-end="${audio.end_s}">
     <span class="proof-icon">${playIcon(11, 'currentColor')}</span></button>` : '');
 
-function argCardHtml(state, side, arg, rebuttedBy) {
+function argCardHtml(state, side, arg, rebuttedBy, factScoring) {
   const cls = arg.classification;
   const chips = `
     <span class="arg-tag">${arg.weight === 'primary' ? 'الحجة الرئيسية' : 'حجة فرعية'}</span>
     <span class="arg-tag arg-cls" title="${CLS_HINT[cls.type]}">${CLS_AR[cls.type]}${cls.tentative ? ' · تصنيف تقريبي' : ''}</span>
     <span class="arg-verdict av-${AV_KIND[arg.verdict]}">${AV_AR[arg.verdict]}</span>`;
+  const factChip = (p) => {
+    if (p.fact) {
+      return `<span class="arg-verdict av-${FACT_KIND[p.fact.verdict]}"
+        title="${esc(p.fact.explanation_ar || '')}">${FACT_AR[p.fact.verdict]}</span>`;
+    }
+    return p.external ? '<span class="arg-ext">واقعة خارجية</span>' : '';
+  };
   const premises = arg.premises.map((p, i) => `
     <div class="arg-line">
       <span class="arg-line-label">مقدمة</span>
       <span class="arg-quote">«${esc(p.quote)}»</span>
-      ${p.external ? '<span class="arg-ext">واقعة خارجية</span>' : ''}
+      ${factChip(p)}
       ${playChip(`pr-${arg.id}-${i}`, p.audio)}
     </div>`).join('');
+  // فحص الوقائع hit this argument: say exactly what it cost.
+  let factHit = '';
+  if (arg.fact_factor != null) {
+    const what = arg.fact_worst === 'contradicted'
+      ? (arg.fact_factor === 0
+        ? 'أُسقطت الحجة: مقدمة خالفت المصادر (×0)'
+        : `أُضعفت بشدة: مقدمة خالفت المصادر (×${arg.fact_factor})`)
+      : `خُفّضت: واقعة صحيحة جزئيًا (×${arg.fact_factor})`;
+    factHit = `<div class="arg-facthit">${what}${factScoring === false
+      ? ' — لا يؤثر في الدرجة حاليًا' : ''}</div>`;
+  }
   const implicit = arg.implicit_premises.map((ip) => `
     <div class="arg-line arg-implicit">
       <span class="arg-line-label">مقدمة غير منطوقة</span>
@@ -237,6 +259,7 @@ function argCardHtml(state, side, arg, rebuttedBy) {
         ${playChip(`co-${arg.id}`, arg.conclusion.audio)}
       </div>
       ${premises}${implicit}
+      ${factHit}
       ${arg.failure_point_ar ? `<div class="arg-fail">موضع الخلل: ${esc(arg.failure_point_ar)}</div>` : ''}
       ${links.length ? `<div class="arg-links">${links.join(' · ')}</div>` : ''}
       ${preempted}
@@ -249,6 +272,7 @@ function analysisHtml(state, v) {
   ['a', 'b'].forEach((s) => v.analysis[s].arguments.forEach((arg) => {
     if (arg.rebuts) rebuttedBy[arg.rebuts.target_id] = { side: s, effect: arg.rebuts.effect };
   }));
+  const factScoring = v.fact_checks ? v.fact_checks.scoring : false;
   const blocks = ['a', 'b'].map((s) => {
     const m = v.analysis[s];
     const assertions = m.unsupported_assertions.length ? `
@@ -258,7 +282,7 @@ function analysisHtml(state, v) {
           <div class="arg-line"><span class="arg-quote">«${esc(u.quote)}»</span>
           ${playChip(`ua-${s}-${i}`, u.audio)}</div>`).join('')}
       </div>` : '';
-    const cards = m.arguments.map((arg) => argCardHtml(state, s, arg, rebuttedBy[arg.id])).join('');
+    const cards = m.arguments.map((arg) => argCardHtml(state, s, arg, rebuttedBy[arg.id], factScoring)).join('');
     return `
       <div class="arg-block">
         <div class="arg-owner" style="color:${sideColor(s)}">${esc(nameOf(state, s))}</div>
@@ -290,6 +314,10 @@ function soundnessHtml(state, v) {
 }
 
 function externalHtml(state, v) {
+  // v2.2: the verified panel supersedes the old registry; old verdicts
+  // (no fact_checks) keep the tabula-rasa note they were judged under.
+  const fc = v.fact_checks;
+  if (fc && fc.claims && fc.claims.length) return factsHtml(state, fc);
   if (!v.external_claims.length) return '';
   const rows = v.external_claims.map((e, i) => `
     <div class="ext-row">
@@ -301,6 +329,30 @@ function externalHtml(state, v) {
       <div class="panel-head"><span>وقائع استند إليها القول</span></div>
       ${rows}
       <div class="ext-note">لا يفصل الحَكَم في صحة هذه الوقائع أو خطئها.</div>
+    </div>`;
+}
+
+function factsHtml(state, fc) {
+  const cards = fc.claims.map((c, i) => `
+    <div class="fal-card" style="--c:${sideColor(c.side)}">
+      <div class="fal-head">
+        <span class="fal-name">${esc(c.claim_ar)}</span>
+        <span class="arg-verdict av-${FACT_KIND[c.verdict]}">${esc(c.verdict_ar || FACT_AR[c.verdict])}</span>
+      </div>
+      <div class="fal-meta">${esc(nameOf(state, c.side))}</div>
+      <blockquote class="fal-quote">«${esc(c.quote)}»
+        ${playChip(`fc-${i}`, c.audio)}</blockquote>
+      ${c.explanation_ar ? `<div class="fal-why">${esc(c.explanation_ar)}</div>` : ''}
+      ${c.sources && c.sources.length ? `<div class="fact-srcs">${c.sources.map((s) => `
+        <a class="fact-src" href="${esc(s.uri)}" target="_blank" rel="noopener">${esc(s.title || 'مصدر')}</a>`).join('')}</div>` : ''}
+    </div>`).join('');
+  return `
+    <div class="v-panel">
+      <div class="panel-head"><span>تحقق الوقائع</span></div>
+      <div class="fal-list">${cards}</div>
+      <div class="ext-note">تحقق آلي بالبحث في مصادر عامة — الادعاء الذي تعذّر
+        التحقق منه لا يُحاسَب عليه صاحبه${fc.scoring === false
+    ? '، ونتائج التحقق معروضة للاطلاع ولا تؤثر في الدرجة حاليًا' : ''}.</div>
     </div>`;
 }
 

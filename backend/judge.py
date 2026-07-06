@@ -37,7 +37,11 @@ from .prompts import PROBE_PROMPT, SYNTHESIS_PROMPT
 from .schemas import (AXES, AXIS_NAMES_AR, EMOTIONAL_FALLACIES, FALLACY_DEFS_AR,
                       FALLACY_NAMES, FALLACY_TYPES, SEVERITIES, SOUNDNESS_NAMES,
                       SOUNDNESS_TYPES, probe_schema, synthesis_schema)
-from .scoring import CREDIT, SURVIVAL, UNTESTED_FACTOR, compute_score
+from .factcheck import (VERDICT_AR as FACT_VERDICT_AR, claim_key,
+                        collect_claims, verify_claims)
+from .scoring import (CREDIT, FACT_CONTRADICTED_DEDUCTIVE,
+                      FACT_CONTRADICTED_INDUCTIVE, FACT_PARTIALLY, SURVIVAL,
+                      UNTESTED_FACTOR, compute_score)
 from .store import get_store
 
 log = logging.getLogger("hakam.judge")
@@ -527,17 +531,28 @@ def _strawman_rebuttal_ids(fallacies: list) -> set:
 
 
 def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
-                  soundness: list, preempts: Optional[dict] = None) -> dict:
+                  soundness: list, preempts: Optional[dict] = None,
+                  facts: Optional[dict] = None) -> dict:
     other = "b" if side == "a" else "a"
     strawman = _strawman_rebuttal_ids(fallacies)
     preempts = preempts or {}
+    facts = facts or {}  # argument id -> {"factor", "worst"} (فحص الوقائع)
+
+    def _fact_factor(aid):
+        return (facts.get(aid) or {}).get("factor", 1.0)
+
+    def _fact_voided(aid):
+        # A rebuttal standing on a claim the sources contradicted cannot
+        # damage its target — its own credit already collapsed via the factor.
+        return (facts.get(aid) or {}).get("worst") == "contradicted"
 
     # Worst rebuttal survival suffered per target argument — the ensemble
     # MEAN when vote detail exists (variance damping), else the categorical
     # effect (per-probe scoring and older evals).
     suffered = {}
     for arg in maps[other]["arguments"]:
-        if arg.get("rebuts") and arg["id"] not in strawman:
+        if arg.get("rebuts") and arg["id"] not in strawman \
+                and not _fact_voided(arg["id"]):
             ev = evals.get(arg["id"]) or {}
             eff = ev.get("rebuttal_effect")
             surv = ev.get("survival_mean")
@@ -566,7 +581,7 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
             # قاعدة الكلمة الأخيرة: nobody could answer it and nothing
             # pre-answered it — priced as unproven, never as fully earned.
             survival = min(survival, UNTESTED_FACTOR)
-        credits.append(base * survival)
+        credits.append(base * survival * _fact_factor(arg["id"]))
         if ev["verdict"] in ("invalid", "weak"):
             negative.add(arg["id"])
 
@@ -579,7 +594,8 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
         credit = ev.get("credit_mean")
         if credit is None:
             credit = CREDIT.get(ev["verdict"], 0.5)
-        opp_args.append({"credit": credit,
+        # A fact-dismissed opponent point is worth little to ignore.
+        opp_args.append({"credit": credit * _fact_factor(arg["id"]),
                          "answerable": bool(arg.get("answerable")),
                          "addressed": arg["id"] in my_rebuts})
 
@@ -593,7 +609,41 @@ def _score_inputs(side: str, maps: dict, evals: dict, fallacies: list,
     }
 
 
-def _probe_structured_winner(probe: dict, maps: dict) -> Optional[str]:
+def _fact_effects(maps: dict, results: dict) -> dict:
+    """فحص الوقائع -> deterministic per-argument factors.
+
+    Per argument id -> {"factor", "worst"} from its external premises'
+    verified verdicts (only arguments actually hit get an entry).
+    «contradicted»: a deductive argument with a felled premise is unsound —
+    dismissed (×0.0); an inductive one keeps a sliver (×0.3) unless EVERY
+    premise fell. «partially» prices exaggeration (×0.7)."""
+    out = {}
+    for side in ("a", "b"):
+        for arg in maps[side]["arguments"]:
+            def _res(p):
+                if not p.get("external"):
+                    return None
+                return results.get(claim_key(p.get("external_claim_ar")))
+            verdicts = [r["verdict"] for r in (_res(p) for p in arg["premises"]) if r]
+            factor, worst = 1.0, None
+            if "contradicted" in verdicts:
+                worst = "contradicted"
+                prem = arg["premises"]
+                all_fell = bool(prem) and all(
+                    (_res(p) or {}).get("verdict") == "contradicted" for p in prem)
+                if arg["classification"]["type"] == "deductive" or all_fell:
+                    factor = FACT_CONTRADICTED_DEDUCTIVE
+                else:
+                    factor = FACT_CONTRADICTED_INDUCTIVE
+            elif "partially" in verdicts:
+                worst, factor = "partially", FACT_PARTIALLY
+            if worst:
+                out[arg["id"]] = {"factor": factor, "worst": worst}
+    return out
+
+
+def _probe_structured_winner(probe: dict, maps: dict,
+                             facts: Optional[dict] = None) -> Optional[str]:
     """One probe's own winner vote via the same scoring function."""
     scores = {}
     for side in ("a", "b"):
@@ -602,7 +652,7 @@ def _probe_structured_winner(probe: dict, maps: dict) -> Optional[str]:
                for f in probe["fallacies"]]
         scores[side] = compute_score(_score_inputs(
             side, maps, probe["evals"], fal, probe["soundness"],
-            _probe_preempts(probe)))["score"]
+            _probe_preempts(probe), facts))["score"]
     if scores["a"] > scores["b"]:
         return "a"
     if scores["b"] > scores["a"]:
@@ -912,25 +962,44 @@ def _needs_transcript(t: dict) -> bool:
         and (t.get("transcript") or {}).get("status") != "ok"
 
 
+def _premise_fact(p: dict, fact_results: Optional[dict]) -> Optional[dict]:
+    """فحص الوقائع chip for one external premise (display shape)."""
+    if not p.get("external") or not fact_results:
+        return None
+    r = fact_results.get(claim_key(p.get("external_claim_ar")))
+    if not r:
+        return None
+    return {"verdict": r["verdict"], "verdict_ar": FACT_VERDICT_AR[r["verdict"]],
+            "explanation_ar": r.get("explanation_ar", ""),
+            "sources": r.get("sources", [])}
+
+
 def _display_map(room: dict, maps: dict, arg_results: dict,
-                 preempts: Optional[dict] = None) -> dict:
+                 preempts: Optional[dict] = None,
+                 fact_effects: Optional[dict] = None,
+                 fact_results: Optional[dict] = None) -> dict:
     out = {}
     for side in ("a", "b"):
         args = []
         for arg in maps[side]["arguments"]:
             r = arg_results[arg["id"]]
             pe = (preempts or {}).get(arg["id"])
+            fe = (fact_effects or {}).get(arg["id"])
             args.append({
                 "id": arg["id"], "weight": arg["weight"],
                 "classification": {"type": r["classification"], "tentative": r["tentative"]},
                 "verdict": r["verdict"],
                 "failure_point_ar": _deanonymize_display(r["failure_point_ar"], room),
+                # فحص الوقائع: set only when a verified claim hit this argument.
+                "fact_factor": fe["factor"] if fe else None,
+                "fact_worst": fe["worst"] if fe else None,
                 "conclusion": {"quote": arg["conclusion"]["quote"],
                                "audio": _anchor(room, arg["conclusion"]["segment_ids"],
                                                 arg["conclusion"]["quote"])},
                 "premises": [
                     {"quote": p["quote"], "external": p["external"],
                      "external_claim_ar": p["external_claim_ar"],
+                     "fact": _premise_fact(p, fact_results),
                      "audio": _anchor(room, p["segment_ids"], p["quote"])}
                     for p in arg["premises"]
                 ],
@@ -1013,8 +1082,30 @@ def build_verdict(room: dict) -> dict:
             futs = [pool.submit(_run_probe, room, maps, m, o) for m, o in PROBE_MATRIX]
             return [f.result() for f in futs if f.result() is not None]
 
+    # فحص الوقائع runs CONCURRENTLY with the probe ensemble (near-zero added
+    # wall clock). The cache survives the repair round so no claim is verified
+    # twice; everything model-bound is name-stripped (anonymization is server
+    # code). The probes never see these results — structure judgment stays
+    # fact-blind, the factors apply deterministically below.
+    names = _names(room)
+    fact_cache: dict = {}
+
+    def _facts_for(maps_):
+        claims_ = collect_claims(maps_)
+        stripped = [dict(c, claim_ar=strip_names(c["claim_ar"], names),
+                         quote=strip_names(c["quote"], names)) for c in claims_]
+        verify_claims(strip_names(room.get("topic", ""), names),
+                      stripped, fact_cache)
+        return claims_
+
+    def _probes_and_facts(maps_):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pf = pool.submit(_probe_all, maps_)
+            ff = pool.submit(_facts_for, maps_)
+            return pf.result(), ff.result()
+
     maps = _extract()
-    probes = _probe_all(maps)
+    probes, claims = _probes_and_facts(maps)
     if not probes:
         raise GeminiError("no valid judge probes")
 
@@ -1025,7 +1116,8 @@ def build_verdict(room: dict) -> dict:
                           for a in audit)
         log.info("extraction repair round triggered: %d flags", len(audit))
         maps = _extract(notes)
-        probes = _probe_all(maps) or probes
+        new_probes, claims = _probes_and_facts(maps)
+        probes = new_probes or probes
         repaired = True
         audit = collect_audit_flags(probes)
 
@@ -1037,15 +1129,20 @@ def build_verdict(room: dict) -> dict:
     preempts = merge_preemptions(probes)
     axes_scores, axes_spread = merge_axes(probes, _inapplicable_axes(room))
 
+    # فحص الوقائع factors — deterministic; the kill-switch disarms the SCORE
+    # effect only (display always shows what verification found).
+    fact_effects = _fact_effects(maps, fact_cache)
+    fact_scoring = fact_effects if config.FACTCHECK_SCORING else {}
+
     # Scores (consensus) + per-probe winner votes.
     scores = {s: compute_score(_score_inputs(s, maps,
               {k: v for k, v in arg_results.items()}, fallacies, soundness,
-              preempts))
+              preempts, fact_scoring))
               for s in ("a", "b")}
     margin = abs(scores["a"]["score"] - scores["b"]["score"])
     score_winner = ("a" if scores["a"]["score"] > scores["b"]["score"]
                     else "b" if scores["b"]["score"] > scores["a"]["score"] else None)
-    probe_winners = [_probe_structured_winner(p, maps) for p in probes]
+    probe_winners = [_probe_structured_winner(p, maps, fact_scoring) for p in probes]
     votes = [w for w in probe_winners if w]
     incoherent = sum(1 for p, w in zip(probes, probe_winners)
                      if w and p["holistic"] != w)
@@ -1085,6 +1182,19 @@ def build_verdict(room: dict) -> dict:
 
     results = _results_block(maps, arg_results, fallacies, soundness, scores,
                              winner, preempts)
+    # Synthesis sees the verifier's decisive rulings as settled facts to
+    # NARRATE, never to re-judge or extend to unchecked claims.
+    decisive = [c for c in claims
+                if (fact_cache.get(c["key"]) or {}).get("verdict")
+                in ("supported", "partially", "contradicted")]
+    if decisive:
+        results += ("\nأحكام مدقق الوقائع المستقل (صدرت بمصادر خارجية — "
+                    "انقلها كما هي إن ذكرتها ولا تحكم على وقائع لم يفحصها):\n")
+        results += "\n".join(
+            f"- ادعاء المتحدث «{LABEL_AR[c['side']]}»: "
+            f"«{strip_names(c['claim_ar'], names)[:80]}» — "
+            f"{FACT_VERDICT_AR[fact_cache[c['key']]['verdict']]}"
+            for c in decisive)
     narrative = _run_synthesis(room, results, tier)
     narrative["reasoning_ar"] = _deanonymize_display(narrative["reasoning_ar"], room)
     if narrative["key_moment"]:
@@ -1103,9 +1213,24 @@ def build_verdict(room: dict) -> dict:
         "margin": {"value": round(margin, 1), "band": band},
         "score": {s: scores[s]["score"] for s in ("a", "b")},
         "score_breakdown": scores,
-        "analysis": _display_map(room, maps, arg_results, preempts),
+        "analysis": _display_map(room, maps, arg_results, preempts,
+                                 fact_effects, fact_cache),
         "soundness": soundness_cards,
         "external_claims": _external_claims(maps),
+        "fact_checks": {
+            "enabled": config.FACTCHECK_ENABLED,
+            "scoring": config.FACTCHECK_SCORING,
+            "claims": [{
+                "side": c["side"], "argument_ids": c["argument_ids"],
+                "claim_ar": c["claim_ar"], "quote": c["quote"],
+                "verdict": (fact_cache.get(c["key"]) or {}).get("verdict", "unverifiable"),
+                "verdict_ar": FACT_VERDICT_AR[
+                    (fact_cache.get(c["key"]) or {}).get("verdict", "unverifiable")],
+                "explanation_ar": (fact_cache.get(c["key"]) or {}).get("explanation_ar", ""),
+                "sources": (fact_cache.get(c["key"]) or {}).get("sources", []),
+                "audio": _anchor(room, c["segment_ids"], c["quote"]),
+            } for c in claims],
+        },
         "fallacies": cards,
         "scores": axes_scores,           # the demoted strip (+ v1 fallback shape)
         "emotionality": _emotionality(axes_scores, fallacies),
@@ -1116,6 +1241,11 @@ def build_verdict(room: dict) -> dict:
             "probes_valid": len(probes), "votes": votes, "incoherent_probes": incoherent,
             "contested_args": contested, "audit_flags": len(audit),
             "repaired": repaired, "axis_spread_max": round(axes_spread, 1),
+            "facts": {v: sum(1 for c in claims
+                             if (fact_cache.get(c["key"]) or {}).get(
+                                 "verdict", "unverifiable") == v)
+                      for v in ("supported", "partially", "contradicted",
+                                "unverifiable")},
             "model": config.GEMINI_MODEL,
         },
         "created_at": S.now_utc().isoformat(),

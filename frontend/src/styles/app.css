@@ -567,6 +567,21 @@ button { font-family: inherit; }
   border-radius: 999px; padding: 1px 7px; flex: 0 0 auto;
 }
 .arg-ext-ghost { border-style: dashed; color: var(--muted-2); }
+/* فحص الوقائع (v2.2): «partially» ruling tone + what a hit cost the argument */
+.av-warn { color: #e0a64e; border: 1px solid rgba(224, 166, 78, 0.5); }
+.arg-facthit {
+  font-size: 12px; color: var(--coral-light); line-height: 1.8;
+  border-inline-start: 2px solid var(--coral-line); border-radius: 3px;
+  padding: 4px 12px; background: rgba(242, 115, 95, 0.06);
+}
+.fact-srcs { display: flex; flex-wrap: wrap; gap: 6px; }
+.fact-src {
+  font-size: 10.5px; color: var(--muted); text-decoration: none;
+  border: 1px solid var(--line-12); border-radius: 999px; padding: 2px 9px;
+  direction: ltr; unicode-bidi: embed; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fact-src:hover { color: var(--gold); border-color: rgba(201, 164, 92, 0.55); }
 .arg-fail { font-size: 12.5px; color: var(--coral-light); line-height: 1.8; }
 .arg-links { font-size: 11.5px; color: var(--muted); }
 /* قاعدة الكلمة الأخيرة: final-turn argument nobody could test */

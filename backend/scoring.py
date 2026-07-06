@@ -30,6 +30,18 @@ CREDIT = {"valid": 1.0, "strong": 0.9, "contested": 0.5, "invalid": 0.35, "weak"
 # credit; an untestable one merely claims it — and without this, sandbagging
 # your best material into the final turn is a free win. Gate-3-style prior.
 UNTESTED_FACTOR = 0.8
+# فحص الوقائع (Verdict v2.2, user decision 2026-07-06 — overturns the v2
+# tabula-rasa lock): grounded verification of external claims is the THIRD
+# factor in the credit chain — credit = base × survival × fact.
+# «contradicted» carries the verifier's highest evidentiary bar (≥2
+# independent source domains, server-enforced) so it bites hardest: a
+# deductive argument with a felled premise is unsound — dismissed as if never
+# made; an inductive one keeps a sliver unless EVERY premise fell.
+# «partially» prices exaggeration. «unverifiable»/«supported» NEVER punish —
+# debaters can't cite sources live, and doubt must cost nothing.
+FACT_CONTRADICTED_DEDUCTIVE = 0.0
+FACT_CONTRADICTED_INDUCTIVE = 0.3
+FACT_PARTIALLY = 0.7
 ASSERTION_FLOOR = 0.15          # a debater with only bare assertions
 RANK_W = [1.0, 0.5, 0.25, 0.125]
 SURVIVAL = {"defeated": 0.3, "weakened": 0.7, "unaffected": 1.0}

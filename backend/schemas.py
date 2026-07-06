@@ -367,3 +367,23 @@ def synthesis_schema(turn_ids: list) -> dict:
         "required": ["key_moment", "profiles", "reasoning_ar"],
         "propertyOrdering": ["key_moment", "profiles", "reasoning_ar"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Verdict v2.2 — the fact verifier (فحص الوقائع). One grounded call per
+# external claim; reason-before-verdict ordering like every other schema.
+# The punishing verdicts are enforced AGAIN server-side (source floors in
+# factcheck.py) — this schema only shapes the output, it is not the guard.
+# ---------------------------------------------------------------------------
+FACTCHECK_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "checkable": {"type": "BOOLEAN"},
+        "explanation_ar": {"type": "STRING"},
+        "verdict": {"type": "STRING",
+                    "enum": ["supported", "partially", "contradicted",
+                             "unverifiable"]},
+    },
+    "required": ["checkable", "explanation_ar", "verdict"],
+    "propertyOrdering": ["checkable", "explanation_ar", "verdict"],
+}
