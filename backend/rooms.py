@@ -399,6 +399,88 @@ def judge_room(code):
     return _view(_maybe_judge(room))
 
 
+# --- سجال (optional open-mic closing round) ---------------------------------
+@api.post("/rooms/<code>/sijal/respond")
+def sijal_respond(code):
+    """A debater accepts («سجال») or skips the closing-round offer. Both accept
+    -> the round starts; either skip -> straight to judging."""
+    room = _load(code)
+    side = _require_side(room)
+    accept = bool(_body().get("accept"))
+
+    def mut(r: dict):
+        if r["state"] != S.SIJAL_OFFER:
+            raise ApiError(409, "not_offered", "لا يوجد عرض سجال الآن.")
+        S.sijal_respond(r, side, accept, S.now_utc())
+
+    room = get_store().update(normalize_code(code), mut)
+    # A skip (or the second, resolving accept) may land the room in deliberating.
+    return _view(_maybe_judge(room))
+
+
+@api.post("/rooms/<code>/sijal/stream")
+def sijal_stream(code):
+    """One debater's isolated سجال recording (the whole open-mic round from this
+    device). Same transcode + speech-gate pipeline as a turn; stored under the
+    room's سجال streams, never among the scored turns."""
+    room = _load(code)
+    side = _require_side(room)
+    if room["state"] != S.SIJAL:
+        raise ApiError(409, "not_sijal", "ليست جولة سجال نشطة.")
+    if (room.get("sijal") or {}).get("streams", {}).get(side) is not None:
+        raise ApiError(409, "already_sent", "أُرسل تسجيلك بالفعل.")
+
+    upload = request.files.get("audio")
+    if upload is None:
+        raise ApiError(400, "no_audio", "لم يصل تسجيل صوتي.")
+    content_type = (upload.mimetype or request.form.get("content_type") or "").lower()
+    if content_type.split(";")[0].strip() not in config.ALLOWED_AUDIO_MIMES:
+        raise ApiError(415, "bad_audio_type", "نوع الصوت غير مدعوم.")
+    data = upload.read()
+    if not data:
+        raise ApiError(400, "empty_audio", "التسجيل فارغ.")
+    if len(data) > config.MAX_AUDIO_BYTES:
+        raise ApiError(413, "audio_too_large", "التسجيل أكبر من المسموح.")
+
+    from .audio import TranscodeError, ffmpeg_available, transcode_to_m4a
+    m4a_data, duration_s, audio_stats = None, None, None
+    duration_ms = 0
+    if ffmpeg_available():
+        cap_s = float(config.SIJAL_SECONDS + config.AUDIO_DURATION_GRACE_SECONDS)
+        try:
+            m4a_data, duration_s, audio_stats = transcode_to_m4a(
+                data, content_type, max_duration_s=cap_s)
+        except TranscodeError:
+            raise ApiError(400, "bad_audio", "تعذّرت قراءة التسجيل الصوتي.")
+        # A dead-mic سجال stream is stored empty-but-accepted (silence is a
+        # legitimate "said nothing" in an open-mic round), NOT rejected — we
+        # must never block the other side's stream or the verdict. The
+        # transcriber's own silence gate turns it into an empty transcript.
+        duration_ms = int(duration_s * 1000)
+
+    from .storage import get_storage
+    key = f"sijal_{side}"
+    audio_uri = get_storage().save(normalize_code(code), key, data, content_type)
+    m4a_uri = None
+    if m4a_data is not None:
+        m4a_uri = get_storage().save(
+            normalize_code(code), key, m4a_data, "audio/mp4", variant="norm")
+
+    def mut(r: dict):
+        if r["state"] != S.SIJAL:
+            raise ApiError(409, "not_sijal", "انتهت جولة السجال.")
+        S.record_sijal_stream(
+            r, side, audio_uri, duration_ms, content_type, m4a_uri=m4a_uri,
+            duration_s=duration_s, audio_stats=audio_stats,
+            transcribe_pending=config.TRANSCRIBE_ENABLED, now=S.now_utc())
+
+    room = get_store().update(normalize_code(code), mut)
+    from .tasks import enqueue_transcription
+    enqueue_transcription(normalize_code(code), key)
+    # Both streams in -> the room is deliberating; judge now.
+    return _view(_maybe_judge(room))
+
+
 @api.post("/rooms/<code>/rtc")
 def rtc_signal(code):
     """Live-audio signaling (debaters only): store my WebRTC blob — one
@@ -709,11 +791,38 @@ def turn_audio(code, turn):
     if S.side_of_token(room, _token()) is None \
             and not S.spectator_of_token(room, _token()):
         raise ApiError(401, "unauthorized", "رمز غير صالح لهذه الجلسة.")
-    entry = next((t for t in room["turns"] if t["turn"] == turn and t.get("audio_uri")), None)
+    if turn.startswith("sijal_"):
+        entry = ((room.get("sijal") or {}).get("streams") or {}).get(turn.split("_", 1)[1])
+        entry = entry if entry and entry.get("audio_uri") else None
+    else:
+        entry = next((t for t in room["turns"]
+                      if t["turn"] == turn and t.get("audio_uri")), None)
     if entry is None:
         raise ApiError(404, "no_audio", "لا يوجد تسجيل لهذه الجولة.")
     # Prefer the canonical m4a: plays + seeks on both platforms regardless of
     # which device recorded it (webm from Android won't play on iOS Safari).
+    if entry.get("audio_m4a_uri"):
+        uri, mimetype = entry["audio_m4a_uri"], "audio/mp4"
+    else:
+        uri, mimetype = entry["audio_uri"], entry.get("content_type", "application/octet-stream")
+    from .storage import get_storage
+    data = get_storage().read(uri)
+    resp = Response(data, mimetype=mimetype)
+    resp.headers["Cache-Control"] = "private, max-age=600"
+    resp.headers["Accept-Ranges"] = "none"
+    return resp
+
+
+@api.get("/rooms/<code>/sijal/<side>/audio")
+def sijal_audio(code, side):
+    """One debater's سجال stream (participants + spectators), proxied."""
+    room = _load(code)
+    if S.side_of_token(room, _token()) is None \
+            and not S.spectator_of_token(room, _token()):
+        raise ApiError(401, "unauthorized", "رمز غير صالح لهذه الجلسة.")
+    entry = ((room.get("sijal") or {}).get("streams") or {}).get(side)
+    if entry is None or not entry.get("audio_uri"):
+        raise ApiError(404, "no_audio", "لا يوجد تسجيل سجال.")
     if entry.get("audio_m4a_uri"):
         uri, mimetype = entry["audio_m4a_uri"], "audio/mp4"
     else:

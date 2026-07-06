@@ -6,8 +6,11 @@ timezone-aware UTC datetimes in-memory; the store layer persists them and the AP
 layer serializes them to ISO-8601.
 
 State machine:
-    lobby -> claims -> turn_a1 -> turn_b1 -> turn_a2 -> turn_b2 -> deliberating
+    lobby -> claims -> turn_a1 -> turn_b1 -> turn_a2 -> turn_b2
+          -> [sijal_offer -> sijal] -> deliberating
     plus: abandoned (no activity for ABANDON_MINUTES)
+The sijal_* states are an optional, additive open-mic closing round; when both
+sides don't opt in they're skipped and the flow is identical to before.
 `state` equals the current turn key while a turn is active, so it doubles as the
 "whose turn" pointer alongside turn_index (state == turn_order[turn_index]).
 """
@@ -21,9 +24,12 @@ from . import config
 # --- lifecycle states -------------------------------------------------------
 LOBBY = "lobby"          # created; waiting for debater B to join
 CLAIMS = "claims"        # both joined; setting claims + readying up
+SIJAL_OFFER = "sijal_offer"  # turns done; both may opt into a سجال closing round
+SIJAL = "sijal"          # open-mic closing spar in progress (both mics live)
 DELIBERATING = "deliberating"  # all turns done or both finished -> Phase 2 judges here
 ABANDONED = "abandoned"
 PRE_DEBATE = (LOBBY, CLAIMS)
+SIJAL_STATES = (SIJAL_OFFER, SIJAL)
 TERMINAL = (DELIBERATING, ABANDONED)
 
 SIDES = ("a", "b")
@@ -305,6 +311,12 @@ def shared_snapshot(room: dict, share_id: str, now: Optional[datetime] = None) -
             "audio_uri": None,
             "audio_src": t.get("audio_m4a_uri"),
         })
+    # Public snapshot keeps the سجال exchange TEXT but not its audio (only turn
+    # audio is copied to shared/), so drop the stream flags -> text, no dead
+    # play buttons.
+    verdict = room["verdict"]
+    if verdict and (verdict.get("sijal") or {}).get("streams"):
+        verdict = {**verdict, "sijal": {**verdict["sijal"], "streams": {}}}
     return {
         "share_id": share_id,
         "topic": room.get("topic") or "",
@@ -312,7 +324,7 @@ def shared_snapshot(room: dict, share_id: str, now: Optional[datetime] = None) -
         "debaters": {s: {"name": room["debaters"][s].get("name") or "",
                          "claim": room["debaters"][s].get("claim") or ""}
                      for s in SIDES},
-        "verdict": room["verdict"],
+        "verdict": verdict,
         "turns": turns,
         "created_at": now,
         "expires_at": now + timedelta(days=config.SHARE_TTL_DAYS),
@@ -354,13 +366,32 @@ def start_debate(room: dict, now: Optional[datetime] = None) -> None:
     _touch(room, now, activity=True)
 
 
+def _to_post_debate(room: dict, now: datetime) -> None:
+    """Structured debate is over (last turn or mutual finish): offer سجال if
+    enabled and not already resolved, else go straight to deliberating. All
+    turn clocks stop either way. سجال is a separate, additive phase — its
+    streams live under room['sijal'], NEVER in room['turns'], so extraction and
+    scoring are blind to it by construction."""
+    room["turn_deadline_at"] = None
+    room["turn_prep_deadline_at"] = None
+    room["processing_since"] = None
+    if config.SIJAL_ENABLED and not room.get("sijal"):
+        room["state"] = SIJAL_OFFER
+        room["sijal"] = {
+            "offer_deadline_at": now + timedelta(seconds=config.SIJAL_OFFER_SECONDS),
+            "a_accepted": None, "b_accepted": None,
+            "started_at": None, "deadline_at": None,
+            "streams": {"a": None, "b": None},
+        }
+    else:
+        room["state"] = DELIBERATING
+
+
 def advance_turn(room: dict, now: Optional[datetime] = None) -> None:
     now = now or now_utc()
     room["turn_index"] += 1
     if room["turn_index"] >= len(room["turn_order"]):
-        room["state"] = DELIBERATING
-        room["turn_deadline_at"] = None
-        room["turn_prep_deadline_at"] = None
+        _to_post_debate(room, now)
     else:
         room["state"] = room["turn_order"][room["turn_index"]]
         _begin_turn_prep(room, now)
@@ -490,8 +521,52 @@ def request_finish(room: dict, side: str, now: Optional[datetime] = None) -> Non
     room["finish_requested"][side] = True
     _touch(room, now, activity=True)
     if room["finish_requested"]["a"] and room["finish_requested"]["b"]:
+        _to_post_debate(room, now)
+
+
+# --- سجال (optional open-mic closing round) ---------------------------------
+def sijal_respond(room: dict, side: str, accept: bool,
+                  now: Optional[datetime] = None) -> None:
+    """A debater accepts or skips the سجال offer. Both accept -> start the
+    open-mic round (shared server clock). Either skip -> straight to
+    deliberating (no spar without both). No-op outside the offer state."""
+    now = now or now_utc()
+    if room.get("state") != SIJAL_OFFER:
+        return
+    sj = room["sijal"]
+    sj[f"{side}_accepted"] = bool(accept)
+    if not accept:
         room["state"] = DELIBERATING
-        room["turn_deadline_at"] = None
+    elif sj["a_accepted"] and sj["b_accepted"]:
+        room["state"] = SIJAL
+        sj["started_at"] = now
+        sj["deadline_at"] = now + timedelta(seconds=config.SIJAL_SECONDS)
+    _touch(room, now, activity=True)
+
+
+def record_sijal_stream(room: dict, side: str, audio_uri: str, duration_ms: int,
+                        content_type: str, m4a_uri: Optional[str] = None,
+                        duration_s: Optional[float] = None,
+                        audio_stats: Optional[dict] = None,
+                        transcribe_pending: bool = False,
+                        now: Optional[datetime] = None) -> None:
+    """Store one debater's isolated سجال recording. When BOTH streams are in,
+    the round is over -> deliberating. Streams live under room['sijal'],
+    NEVER room['turns'] — the judge's scoring machinery cannot see them."""
+    now = now or now_utc()
+    sj = room["sijal"]
+    sj["streams"][side] = {
+        "side": side, "debater": side,
+        "audio_uri": audio_uri, "audio_m4a_uri": m4a_uri,
+        "content_type": content_type, "duration_ms": int(duration_ms),
+        "duration_s": duration_s, "audio_stats": audio_stats,
+        "transcript": {"status": "pending", "segments": [], "attempts": 0}
+        if transcribe_pending else None,
+        "created_at": now,
+    }
+    _touch(room, now, activity=True)
+    if sj["streams"]["a"] is not None and sj["streams"]["b"] is not None:
+        room["state"] = DELIBERATING
 
 
 # --- reconcile: the lazy, server-authoritative timer ------------------------
@@ -540,6 +615,18 @@ def reconcile(room: dict, now: Optional[datetime] = None) -> bool:
         else:
             break
 
+    # سجال lifecycle (short, self-resolving windows -> deliberating; a dropped
+    # or silent debater must never freeze the verdict, so both time out).
+    if room["state"] == SIJAL_OFFER:
+        if now > room["sijal"]["offer_deadline_at"]:
+            room["state"] = DELIBERATING          # nobody completed the opt-in
+            changed = True
+    elif room["state"] == SIJAL:
+        if now > room["sijal"]["deadline_at"] + timedelta(
+                seconds=config.SUBMIT_GRACE_SECONDS):
+            room["state"] = DELIBERATING          # round over; judge what arrived
+            changed = True
+
     # Abandonment (pre-debate idling or a fully-stalled live debate).
     if room["state"] in PRE_DEBATE or is_turn_state(room["state"]):
         idle = now - room["last_activity_at"]
@@ -556,6 +643,25 @@ def reconcile(room: dict, now: Optional[datetime] = None) -> bool:
 # --- public projection ------------------------------------------------------
 def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(timezone.utc).isoformat() if dt else None
+
+
+def sijal_view(room: dict, now: Optional[datetime] = None) -> Optional[dict]:
+    """Client-facing سجال state: opt-in flags, deadlines (for the countdown),
+    and whether each side's stream landed. Audio uris/tokens never leave here."""
+    sj = room.get("sijal")
+    if not sj:
+        return None
+    return {
+        "phase": (room["state"] if room["state"] in SIJAL_STATES else "done"),
+        "offer_deadline_at": _iso(sj.get("offer_deadline_at")),
+        "started_at": _iso(sj.get("started_at")),
+        "deadline_at": _iso(sj.get("deadline_at")),
+        "a_accepted": sj.get("a_accepted"),
+        "b_accepted": sj.get("b_accepted"),
+        "seconds": config.SIJAL_SECONDS,
+        "streams": {s: (sj.get("streams") or {}).get(s) is not None
+                    for s in SIDES},
+    }
 
 
 def public_view(room: dict, now: Optional[datetime] = None) -> dict:
@@ -619,6 +725,7 @@ def public_view(room: dict, now: Optional[datetime] = None) -> dict:
         "sfu_published": sfu_published_view(room),
         "both_ready": both_ready(room),
         "judging_status": (room.get("judging") or {}).get("status"),
+        "sijal": sijal_view(room, now),
         "verdict": room["verdict"],
         # Set once the creator starts a rematch; the opponent's poll follows it.
         "rematch_code": (room.get("rematch") or {}).get("code"),

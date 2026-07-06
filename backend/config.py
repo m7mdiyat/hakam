@@ -163,6 +163,20 @@ FACTCHECK_SCORING = os.environ.get(
 FACTCHECK_CAP = _int("HAKAM_FACTCHECK_CAP", 8)
 FACTCHECK_THINKING_BUDGET = _int("HAKAM_FACTCHECK_THINKING_BUDGET", 512)
 
+# --- سجال (open-mic closing round, synthesis-only) --------------------------
+# After the structured turns, both debaters may opt into a short simultaneous
+# open-mic spar. Each device records its OWN mic (isolation is free — two
+# devices, no source separation); the two streams are transcribed separately
+# and interleaved on a shared clock. سجال feeds ONLY the synthesis narrative as
+# BACKGROUND context (never named, per user choice 2026-07-06) — it structurally
+# never reaches extraction or scoring, so it cannot touch درجة الحجاج or the
+# last-word rule. Fully additive: nobody opting in => behavior identical to no
+# سجال. Disabled by default in tests (conftest) so existing flows are untouched.
+SIJAL_ENABLED = os.environ.get(
+    "HAKAM_SIJAL_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+SIJAL_SECONDS = _int("HAKAM_SIJAL_SECONDS", 60)           # open-mic round length
+SIJAL_OFFER_SECONDS = _int("HAKAM_SIJAL_OFFER_SECONDS", 30)  # accept-by window
+
 # --- Judge ensemble -----------------------------------------------------------
 # One judging run may be claimed at a time; a crashed run's lease expires after
 # this many seconds so a client retrigger (POST /judge) can reclaim it.

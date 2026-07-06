@@ -356,6 +356,35 @@ function factsHtml(state, fc) {
     </div>`;
 }
 
+// سجال closing round (display-only — it colored the judge's read, never a
+// score). Per-side full-stream playback + the interleaved exchange text.
+function sijalHtml(state, v) {
+  const sj = v.sijal;
+  if (!sj || !sj.occurred) return '';
+  const plays = ['a', 'b'].filter((s) => sj.streams && sj.streams[s]).map((s) => `
+    <button class="proof-btn" type="button" data-proof="sj-${s}" data-turn="sijal_${s}"
+      data-start="0" style="--c:${sideColor(s)}">
+      <span class="proof-icon">${playIcon(13, 'currentColor')}</span>
+      سِجال ${esc(nameOf(state, s))}</button>`).join('');
+  const lines = (sj.exchange || []).map((r) => `
+    <div class="sijal-line">
+      <span class="sijal-who" style="color:${sideColor(r.speaker)}">${esc(nameOf(state, r.speaker))}:</span>
+      <span class="sijal-text">${esc(r.text)}</span>
+    </div>`).join('');
+  return `
+    <div class="v-panel sijal-panel">
+      <button class="v-collapse-head" type="button" data-collapse>
+        <span>السِّجال — جولة ختامية حرة</span><span class="chev">▾</span>
+      </button>
+      <div class="v-collapse-body" hidden>
+        ${plays ? `<div class="sijal-plays">${plays}</div>` : ''}
+        ${lines || '<div class="v-empty">لم يُسمع كلام في السجال.</div>'}
+        <div class="ext-note">مداخلات حرة بمِيكروفون مفتوح — استرشد بها الحَكَم
+          في قراءة الموقف، ولم تُغيّر الدرجة.</div>
+      </div>
+    </div>`;
+}
+
 // Demoted general assessment: axes + emotionality + radar, collapsed.
 function assessmentStripHtml(state, v) {
   return `
@@ -492,6 +521,7 @@ export function verdictHtml(state, spectator = false) {
       ${fallaciesHtml(state, v)}
       ${soundnessHtml(state, v)}
       ${externalHtml(state, v)}
+      ${sijalHtml(state, v)}
       ${assessmentStripHtml(state, v)}` : `
       ${radarHtml(state, v)}
       ${axesHtml(state, v)}

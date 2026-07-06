@@ -121,6 +121,28 @@ export const api = {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(body),
     }).then(handle),
 
+  // سجال (optional open-mic closing round).
+  sijalRespond: (code, token, accept) =>
+    fetch(`${API}/rooms/${code}/sijal/respond`, {
+      method: 'POST', headers: jsonHeaders(token), body: JSON.stringify({ accept }),
+    }).then(handle),
+  sijalStream: (code, token, blob) => {
+    const fd = new FormData();
+    const ext = (blob.type.split('/')[1] || 'webm').split(';')[0];
+    fd.append('audio', blob, `sijal.${ext}`);
+    fd.append('content_type', blob.type);
+    return fetch(`${API}/rooms/${code}/sijal/stream`, {
+      method: 'POST', headers: { 'X-Debater-Token': token }, body: fd,
+    }).then(handle);
+  },
+  fetchSijalAudioUrl: async (code, token, side) => {
+    const res = await fetch(`${API}/rooms/${code}/sijal/${side}/audio`, {
+      headers: { 'X-Debater-Token': token },
+    });
+    if (!res.ok) throw new Error('audio_fetch_failed');
+    return URL.createObjectURL(await res.blob());
+  },
+
   // «شارك الحكم»: publish the verdict as a 7-day public snapshot link.
   shareVerdict: (code, token) =>
     fetch(`${API}/rooms/${code}/share`, { method: 'POST', headers: jsonHeaders(token) }).then(handle),

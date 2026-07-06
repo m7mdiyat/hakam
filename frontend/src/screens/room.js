@@ -2,11 +2,13 @@ import { mountMessage } from '../components.js';
 import { creds, specCreds } from '../store.js';
 import { mountLobby, mountSpectatorLobby } from './lobby.js';
 import { mountDebate } from './debate.js';
+import { mountSijal } from './sijal.js';
 import { mountVerdict } from './verdict.js';
 
 function category(state) {
   if (state === 'lobby' || state === 'claims') return 'lobby';
   if (state && state.startsWith('turn_')) return 'debate';
+  if (state === 'sijal_offer' || state === 'sijal') return 'sijal';
   if (state === 'deliberating') return 'verdict';
   if (state === 'abandoned') return 'abandoned';
   return 'lobby';
@@ -28,7 +30,15 @@ export function createRoomView(root, ctx) {
     if (k === 'lobby') {
       sub = ctx.role === 'spectator' ? mountSpectatorLobby(root, ctx) : mountLobby(root, ctx);
     } else if (k === 'debate') sub = mountDebate(root, ctx);
-    else if (k === 'verdict') sub = mountVerdict(root, ctx);
+    else if (k === 'sijal') {
+      // Debaters run the open-mic round; spectators just wait it out.
+      sub = ctx.role === 'spectator'
+        ? mountMessage(root, {
+          label: 'سجال', title: 'جولة السِّجال',
+          body: 'يتبادل المتناظران مداخلة ختامية حرة — يظهر الحُكم بعد قليل.',
+        })
+        : mountSijal(root, ctx);
+    } else if (k === 'verdict') sub = mountVerdict(root, ctx);
     else if (k === 'abandoned') {
       sub = mountMessage(root, {
         label: 'الجلسة', title: 'انتهت الجلسة',

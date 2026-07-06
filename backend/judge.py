@@ -919,15 +919,51 @@ def _results_block(maps: dict, arg_results: dict, fallacies: list,
     return "\n".join(lines)
 
 
-def _run_synthesis(room: dict, results_block: str, tier: str) -> dict:
+def _sijal_exchange(room: dict) -> list:
+    """The سجال streams interleaved into one ordered closing exchange.
+    Both streams share a start clock (server-stamped), so segment start times
+    sort directly. [{'speaker': 'a'|'b', 'text': str}] — display raw text."""
+    rows = []
+    for side, st in _sijal_streams(room).items():
+        if not st:
+            continue
+        for seg in _segments_ok(st):
+            rows.append({"speaker": side, "start": seg.get("start_s", 0.0),
+                         "text": seg["text"]})
+    rows.sort(key=lambda r: r["start"])
+    return [{"speaker": r["speaker"], "text": r["text"]} for r in rows]
+
+
+def _sijal_synthesis_block(room: dict, exchange: list) -> str:
+    """Name-stripped سجال transcript for the synthesis prompt — BACKGROUND
+    context only (user choice: never named in the output)."""
+    if not exchange:
+        return ""
+    names = _names(room)
+    lines = [f"المتحدث «{LABEL_AR[r['speaker']]}»: "
+             f"{strip_names(r['text'], names)}" for r in exchange]
+    return "\n".join(lines)
+
+
+def _run_synthesis(room: dict, results_block: str, tier: str,
+                   sijal_block: str = "") -> dict:
     turn_ids = [i["tid"] for i in _turn_infos(room)]
     names = _names(room)
     mapping = {"a": "a", "b": "b"}
+    sijal_section = ""
+    if sijal_block:
+        sijal_section = (
+            "\n\nمداخلات ختامية حرة (سجال — سياق مساعد فقط):\n"
+            "<sijal>\n" + sijal_block + "\n</sijal>\n"
+            "استرشد بها لفهم نبرة الطرفين وحسم موقفيهما فقط؛ لا تذكر «السجال» "
+            "صراحةً في مخرجاتك، ولا تبنِ عليها حكمًا أو نتيجة — النتائج أعلاه "
+            "محسومة، والدرجات لا تتغير بها.")
     prompt = SYNTHESIS_PROMPT.format(
         topic=strip_names(room.get("topic", ""), names),
         claims_block=claims_block(room, mapping, "ab"),
         results_block=results_block,
         transcript=transcript_view(room, mapping),
+        sijal_section=sijal_section,
     )
     try:
         raw = generate_json(prompt, synthesis_schema(turn_ids),
@@ -1045,13 +1081,26 @@ def _external_claims(maps: dict) -> list:
     return out
 
 
+def _sijal_streams(room: dict) -> dict:
+    """{'a': entry|None, 'b': entry|None} for the سجال closing round."""
+    return (room.get("sijal") or {}).get("streams") or {}
+
+
 def build_verdict(room: dict) -> dict:
     # Transcript preflight (unchanged from v1): wait for the queue, then retry.
+    # سجال streams (if any) join the same wait — they feed synthesis only.
     import time
+
+    def _pending(r):
+        items = [t for t in r["turns"] if _needs_transcript(t)]
+        items += [s for s in _sijal_streams(r).values()
+                  if s and _needs_transcript(s)]
+        return items
+
     deadline = time.time() + 25
     while time.time() < deadline and any(
             (t.get("transcript") or {}).get("status") == "pending"
-            for t in room["turns"] if _needs_transcript(t)):
+            for t in _pending(room)):
         time.sleep(2)
         room = get_store().get(room["code"]) or room
     from .transcribe import transcribe_turn
@@ -1059,6 +1108,10 @@ def build_verdict(room: dict) -> dict:
     for t in room["turns"]:
         if _needs_transcript(t):
             transcribe_turn(room["code"], t["turn"])
+            retried = True
+    for side, s in _sijal_streams(room).items():
+        if s and _needs_transcript(s):
+            transcribe_turn(room["code"], f"sijal_{side}")
             retried = True
     if retried:
         room = get_store().get(room["code"]) or room
@@ -1195,7 +1248,9 @@ def build_verdict(room: dict) -> dict:
             f"«{strip_names(c['claim_ar'], names)[:80]}» — "
             f"{FACT_VERDICT_AR[fact_cache[c['key']]['verdict']]}"
             for c in decisive)
-    narrative = _run_synthesis(room, results, tier)
+    sijal_exchange = _sijal_exchange(room)
+    narrative = _run_synthesis(room, results, tier,
+                               _sijal_synthesis_block(room, sijal_exchange))
     narrative["reasoning_ar"] = _deanonymize_display(narrative["reasoning_ar"], room)
     if narrative["key_moment"]:
         narrative["key_moment"]["description_ar"] = _deanonymize_display(
@@ -1237,6 +1292,14 @@ def build_verdict(room: dict) -> dict:
         "key_moment": narrative["key_moment"],
         "profiles": narrative["profiles"],
         "reasoning_ar": narrative["reasoning_ar"],
+        # سجال closing round: display-only (informed synthesis as background,
+        # never touched a score). Absent/empty when it didn't happen.
+        "sijal": ({"occurred": True,
+                   "exchange": sijal_exchange,
+                   "streams": {s: bool(_sijal_streams(room).get(s))
+                               for s in ("a", "b")}}
+                  if sijal_exchange or any(_sijal_streams(room).values())
+                  else None),
         "diagnostics": {
             "probes_valid": len(probes), "votes": votes, "incoherent_probes": incoherent,
             "contested_args": contested, "audit_flags": len(audit),

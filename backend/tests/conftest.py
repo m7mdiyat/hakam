@@ -69,6 +69,17 @@ def make_silence(seconds: float) -> bytes:
             return f.read()
 
 
+@pytest.fixture(autouse=True)
+def _sijal_off():
+    """سجال is an optional post-debate round; keep it OFF for the existing
+    flows (they expect turns -> deliberating directly). test_sijal opts in."""
+    from backend import config
+    prev = config.SIJAL_ENABLED
+    config.SIJAL_ENABLED = False
+    yield
+    config.SIJAL_ENABLED = prev
+
+
 @pytest.fixture(scope="session")
 def client():
     from backend.app import app

@@ -108,18 +108,28 @@ def normalize_segments(raw: list, duration_s: Optional[float]) -> list:
     return segs
 
 
+def _recording(room: dict, turn_key: str) -> Optional[dict]:
+    """Resolve a recording by key: a normal turn, or a سجال stream
+    ('sijal_a'/'sijal_b', stored under room['sijal']['streams'])."""
+    if turn_key.startswith("sijal_"):
+        side = turn_key.split("_", 1)[1]
+        return ((room.get("sijal") or {}).get("streams") or {}).get(side)
+    return next((t for t in room["turns"] if t["turn"] == turn_key), None)
+
+
 def _write_transcript(code: str, turn_key: str, transcript: dict) -> None:
     def mut(room: dict):
-        for t in room["turns"]:
-            if t["turn"] == turn_key:
-                existing = t.get("transcript") or {}
-                transcript["attempts"] = int(existing.get("attempts", 0)) + 1
-                t["transcript"] = transcript
-                # ok or failed, the wait is over either way: if the next
-                # turn's prep window is held on this transcript, open it.
-                S.release_processing_hold(room, turn_key)
-                return
-        raise LookupError(f"turn {turn_key} not found in room {code}")
+        entry = _recording(room, turn_key)
+        if entry is None:
+            raise LookupError(f"recording {turn_key} not found in room {code}")
+        existing = entry.get("transcript") or {}
+        transcript["attempts"] = int(existing.get("attempts", 0)) + 1
+        entry["transcript"] = transcript
+        # ok or failed, the wait is over either way: if the next turn's prep
+        # window is held on this transcript, open it (turns only; سجال streams
+        # run no processing hold).
+        if not turn_key.startswith("sijal_"):
+            S.release_processing_hold(room, turn_key)
 
     get_store().update(code, mut)
 
@@ -141,7 +151,7 @@ def transcribe_turn(code: str, turn_key: str) -> str:
     room = get_store().get(code)
     if room is None:
         return "skipped"
-    turn = next((t for t in room["turns"] if t["turn"] == turn_key), None)
+    turn = _recording(room, turn_key)
     if turn is None or turn.get("forfeited") or not turn.get("audio_uri"):
         return "skipped"
     if (turn.get("transcript") or {}).get("status") == "ok":

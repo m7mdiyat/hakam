@@ -278,6 +278,7 @@ SYNTHESIS_PROMPT = """\
 <transcript>
 {transcript}
 </transcript>
+{sijal_section}
 """
 
 # ---------------------------------------------------------------------------
