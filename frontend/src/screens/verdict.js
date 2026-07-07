@@ -9,6 +9,7 @@ import { esc, fmtClock } from '../ui.js';
 import { api } from '../api.js';
 import { creds, specCreds } from '../store.js';
 import { createProofPlayer } from '../audioproof.js';
+import { createSpeedPill } from '../speed.js';
 
 const AXES = ['logic', 'relevance', 'rebuttal', 'clarity', 'composure'];
 const AXIS_AR = {
@@ -591,6 +592,7 @@ export function mountVerdict(root, ctx) {
   let mode = null;              // 'wait' | 'verdict'
   let lastRetrigger = 0;
   let player = null;
+  const speedPill = createSpeedPill(root, { visible: false });  // shown once the verdict (with proofs) renders
   let delibTimer = null;
   let delibIdx = 0;
   let followedRematch = false;
@@ -638,6 +640,7 @@ export function mountVerdict(root, ctx) {
 
   function markProofs() {
     const active = player ? player.active() : null;
+    speedPill.setActive(!!active);
     root.querySelectorAll('[data-proof]').forEach((b) => {
       const on = b.getAttribute('data-proof') === active;
       b.classList.toggle('playing', on);
@@ -647,6 +650,9 @@ export function mountVerdict(root, ctx) {
 
   function renderVerdict(state) {
     root.innerHTML = header('الحُكْم') + verdictHtml(state, spectator);
+    // root.innerHTML wiped the floating pill — re-attach it above the verdict.
+    root.appendChild(speedPill.el);
+    speedPill.setVisible(true);
     player = createProofPlayer(code, token, markProofs);
 
     root.addEventListener('click', (e) => {
@@ -777,6 +783,6 @@ export function mountVerdict(root, ctx) {
       }
       maybeRetrigger(state);
     },
-    unmount() { stopDelibCycle(); if (player) player.destroy(); },
+    unmount() { stopDelibCycle(); speedPill.destroy(); if (player) player.destroy(); },
   };
 }

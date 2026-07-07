@@ -6,6 +6,7 @@ import { toast } from '../components.js';
 import { TurnRecorder, isSupported, warmMic, releaseMic } from '../recorder.js';
 import { createLiveLink } from '../rtc.js';
 import { createSfuPublisher, createSfuListener } from '../sfu.js';
+import { bindAudio, createSpeedPill } from '../speed.js';
 
 const TEAL = 'var(--teal)';
 const CORAL = 'var(--coral)';
@@ -448,11 +449,14 @@ export function mountDebate(root, ctx) {
 
   // --- recorded-turn playback -------------------------------------------
   const audioEl = new Audio();
+  const unbindRate = bindAudio(audioEl);        // honor the global speed pill
+  const speedPill = createSpeedPill(root, { visible: false });
   let playingTurn = null;
   const urlCache = {};
   audioEl.onended = audioEl.onpause = () => { playingTurn = null; markPlaying(); };
 
   function markPlaying() {
+    speedPill.setActive(!!playingTurn);
     turnsEl.querySelectorAll('[data-play]').forEach((b) => {
       const on = b.getAttribute('data-play') === playingTurn;
       b.classList.toggle('playing', on);
@@ -527,6 +531,8 @@ export function mountDebate(root, ctx) {
   }
 
   function renderTurns(state) {
+    // The speed pill is only useful once there's a recording to replay.
+    speedPill.setVisible(state.turns.some((t) => !t.forfeited));
     if (!state.turns.length) {
       turnsEl.innerHTML = '<div class="turns-empty">لم تُسجَّل أي جولة بعد.</div>';
       return;
@@ -671,6 +677,8 @@ export function mountDebate(root, ctx) {
       if (sfuListener) sfuListener.destroy();
       if (!spectator) releaseMic();   // debate over (or navigated away): let go of the device
       try { audioEl.pause(); } catch { /* ignore */ }
+      unbindRate();
+      speedPill.destroy();
       Object.values(urlCache).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
     },
   };

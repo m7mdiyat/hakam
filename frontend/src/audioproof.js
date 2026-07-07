@@ -11,11 +11,13 @@
 //   'timeupdate' alone (~250ms overshoot); timeupdate stays as the backstop
 //   for hidden tabs, where rAF doesn't run.
 import { api } from './api.js';
+import { bindAudio } from './speed.js';
 
 // `fetcher` overrides how a turn's audio URL is obtained (the shared-verdict
 // page has no token — its audio rides the public snapshot endpoints).
 export function createProofPlayer(code, token, onChange, fetcher) {
   const audio = new Audio();
+  const unbindRate = bindAudio(audio);   // honor the global playback-speed pill
   const urls = {};          // turn -> object URL
   let stopAt = null;
   let active = null;        // key of the playing proof button
@@ -100,6 +102,7 @@ export function createProofPlayer(code, token, onChange, fetcher) {
     },
     destroy() {
       try { audio.pause(); } catch { /* ignore */ }
+      unbindRate();
       Object.values(urls).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
     },
   };

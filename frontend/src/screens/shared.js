@@ -6,6 +6,7 @@ import { header, toast } from '../components.js';
 import { play as playIcon, stop as stopIcon } from '../icons.js';
 import { api } from '../api.js';
 import { createProofPlayer } from '../audioproof.js';
+import { createSpeedPill } from '../speed.js';
 import { verdictHtml } from './verdict.js';
 
 function expiredHtml() {
@@ -22,6 +23,7 @@ function expiredHtml() {
 export function mountShared(root, ctx) {
   const { id } = ctx;
   let player = null;
+  let speedPill = null;
 
   root.innerHTML = header('الحُكْم') + `
     <div class="screen-body screen-center verdict">
@@ -30,6 +32,7 @@ export function mountShared(root, ctx) {
 
   function markProofs() {
     const active = player ? player.active() : null;
+    if (speedPill) speedPill.setActive(!!active);
     root.querySelectorAll('[data-proof]').forEach((b) => {
       const on = b.getAttribute('data-proof') === active;
       b.classList.toggle('playing', on);
@@ -39,6 +42,7 @@ export function mountShared(root, ctx) {
 
   api.getShared(id).then((state) => {
     root.innerHTML = header('الحُكْم') + verdictHtml(state, true);
+    speedPill = createSpeedPill(root);   // floats over the verdict; appended after innerHTML
     // The snapshot page owns its actions: re-copy the link + a visitor CTA.
     const actions = root.querySelector('.verdict-actions');
     if (actions) {
@@ -85,5 +89,5 @@ export function mountShared(root, ctx) {
     root.innerHTML = header('الحُكْم') + expiredHtml();
   });
 
-  return { unmount() { if (player) player.destroy(); } };
+  return { unmount() { if (speedPill) speedPill.destroy(); if (player) player.destroy(); } };
 }

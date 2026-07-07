@@ -868,3 +868,50 @@ button { font-family: inherit; }
   .tips-grid .tip-card { flex: 1; }
   .verdict-actions { flex-direction: row; justify-content: center; }
 }
+
+/* Playback-speed pill ----------------------------------------------------- */
+/* Floats over any screen with recorded audio (debate / verdict / shared),   */
+/* docked to the frame's bottom inline-start corner — clear of the centered  */
+/* mic. Absolutely positioned inside .app (position:relative + overflow      */
+/* hidden), so it hovers above the scrolling body and stays inside the frame.*/
+.speed-pill {
+  position: absolute;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  inset-inline-start: 14px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-14);
+  background: rgba(16, 16, 21, 0.82);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  transition: color 0.18s, border-color 0.18s, background 0.18s, box-shadow 0.18s, transform 0.12s;
+}
+.speed-pill:hover { color: var(--ink); }
+.speed-pill svg { opacity: 0.8; flex: 0 0 auto; }
+.speed-pill .speed-rate {
+  font-weight: 700;
+  direction: ltr;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  text-align: center;
+}
+/* Engaged: a non-default rate is set, or audio is actively playing. */
+.speed-pill.speed-fast,
+.speed-pill.speed-active {
+  color: var(--gold);
+  border-color: rgba(201, 164, 92, 0.5);
+  background: rgba(201, 164, 92, 0.16);
+}
+.speed-pill.speed-active { box-shadow: 0 6px 22px rgba(201, 164, 92, 0.22); }
+.speed-pill.speed-bump { animation: speed-bump 0.18s ease; }
+@keyframes speed-bump { 40% { transform: scale(1.13); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .speed-pill.speed-bump { animation: none; } }
