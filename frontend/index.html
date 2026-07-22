@@ -28,9 +28,78 @@
     </script>
     <link rel="stylesheet" href="/src/styles/tokens.css" />
     <link rel="stylesheet" href="/src/styles/app.css" />
+    <!-- ===== MAINTENANCE MODE START — temporary «قيد التطوير» splash =====
+         To restore the live site: delete this style block AND the maintenance
+         body block below, then un-comment the original two boot lines that sit
+         inside that body block (the app div + main.js script). -->
+    <style id="maintenance-style">
+      html, body { height: 100%; background: var(--bg); color: var(--ink); }
+      .maint {
+        min-height: 100dvh;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 26px; padding: 40px 24px;
+        text-align: center; overflow-x: hidden;
+        background:
+          radial-gradient(120% 80% at 50% -10%, rgba(201, 164, 92, 0.10), transparent 60%),
+          var(--bg);
+      }
+      .maint__brand {
+        font-family: var(--font-brand);
+        font-size: 20px; font-weight: 600; color: var(--ink-2);
+        letter-spacing: 0; opacity: 0.9;
+      }
+      .maint__title {
+        margin: 0; max-width: 100%;
+        font-size: clamp(38px, 11vw, 84px);
+        font-weight: 700; line-height: 1.08;
+        background: linear-gradient(180deg, var(--gold-light), var(--gold));
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; color: var(--gold);
+      }
+      .maint__sub {
+        margin: 0; max-width: 24ch;
+        font-size: clamp(14.5px, 4vw, 18px);
+        color: var(--ink-2); font-weight: 400; line-height: 1.7;
+        text-wrap: balance;
+      }
+      .maint__pill {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 10px 20px; border-radius: var(--r-pill);
+        border: 1px solid var(--line-12);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted-3); font-size: 13.5px; font-weight: 500;
+      }
+      .maint__pill i {
+        width: 8px; height: 8px; border-radius: 999px;
+        background: var(--gold);
+        box-shadow: 0 0 0 0 rgba(201, 164, 92, 0.5);
+        animation: maint-pulse 2s ease-out infinite;
+      }
+      @keyframes maint-pulse {
+        0%   { box-shadow: 0 0 0 0 rgba(201, 164, 92, 0.45); }
+        70%  { box-shadow: 0 0 0 9px rgba(201, 164, 92, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(201, 164, 92, 0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .maint__pill i { animation: none; }
+      }
+    </style>
+    <!-- ===== MAINTENANCE MODE END (head) ===== -->
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <!-- ===== MAINTENANCE MODE START (body) =====
+         Original app boot — un-comment these two lines to bring the site back:
+         <div id="app"></div>
+         <script type="module" src="/src/main.js"></script>
+    -->
+    <main class="maint" dir="rtl">
+      <div class="maint__brand">الحَكَم</div>
+
+      <h1 class="maint__title">قيد التطوير</h1>
+      <p class="maint__sub">نُجري بعض التحسينات على الحَكَم، وسنعود قريبًا بإذن الله.</p>
+      <span class="maint__pill"><i></i>الموقع مغلق مؤقتًا</span>
+    </main>
+    <!-- ===== MAINTENANCE MODE END (body) ===== -->
   </body>
 </html>
